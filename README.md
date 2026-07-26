@@ -3,7 +3,7 @@
 Казуальная рыбалка для VK Mini Apps. Забрасывай удочку на заводи, вываживай
 рыбу, собирай альбом видов и улучшай снасти.
 
-- VK Mini App: _создайте приложение в кабинете VK и подставьте ID_
+- VK Mini App: [app54694439](https://vk.com/app54694439)
 - production: [sergeyrudik-omut-vk-game-308d.twc1.net](https://sergeyrudik-omut-vk-game-308d.twc1.net/)
 - репозиторий: [sergeyrudik/omut-vk-game](https://github.com/sergeyrudik/omut-vk-game)
 - политика конфиденциальности: [production/privacy/](https://sergeyrudik-omut-vk-game-308d.twc1.net/privacy/)

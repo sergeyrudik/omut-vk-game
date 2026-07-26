@@ -2,7 +2,7 @@
 
 Приложение: **Омут — тихая заводь**
 
-VK App ID: **_подставить_**
+VK App ID: **54694439**
 
 Production: **https://sergeyrudik-omut-vk-game-308d.twc1.net/**
 

@@ -58,8 +58,7 @@ const REWARD_COOLDOWN_MS = 3 * 60 * 1000;
 const REWARD_DAILY_LIMIT = 8;
 const INTERSTITIAL_INTERVAL_MS = 3 * 60 * 1000;
 const PRODUCTION_URL = "https://sergeyrudik-omut-vk-game-308d.twc1.net/";
-/** Replace with https://vk.com/appXXXX after the VK Mini App is created. */
-const VK_APP_URL = PRODUCTION_URL;
+const VK_APP_URL = "https://vk.com/app54694439";
 
 const DAILY_QUESTS = [
   {

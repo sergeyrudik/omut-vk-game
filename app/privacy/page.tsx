@@ -55,11 +55,13 @@ export default function PrivacyPage() {
           <h2>5. Обращения</h2>
           <p>
             Запросы на доступ, исправление или удаление данных направляйте через
-            контакты разработчика на странице Игры ВКонтакте.
+            контакты разработчика на{" "}
+            <a href="https://vk.com/app54694439">странице Игры ВКонтакте</a>.
           </p>
         </section>
         <footer className="legal-footer">
           <Link href="/terms/">Пользовательское соглашение</Link>
+          <a href="https://vk.com/app54694439">Страница приложения ВКонтакте</a>
         </footer>
       </article>
     </main>
