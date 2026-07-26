@@ -30,6 +30,6 @@ pnpm run moderation:validate
 
 ## URL
 
-- Web / Mobile: `_PRODUCTION_URL_`
-- Privacy: `_PRODUCTION_URL_/privacy/`
-- Terms: `_PRODUCTION_URL_/terms/`
+- Web / Mobile: `https://sergeyrudik-omut-vk-game-308d.twc1.net/`
+- Privacy: `https://sergeyrudik-omut-vk-game-308d.twc1.net/privacy/`
+- Terms: `https://sergeyrudik-omut-vk-game-308d.twc1.net/terms/`

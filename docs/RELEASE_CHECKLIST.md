@@ -4,7 +4,7 @@
 
 VK App ID: **_подставить_**
 
-Production: **_URL Timeweb_**
+Production: **https://sergeyrudik-omut-vk-game-308d.twc1.net/**
 
 ## Код и сборка
 

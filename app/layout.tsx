@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://example.com"),
+  metadataBase: new URL("https://sergeyrudik-omut-vk-game-308d.twc1.net"),
   title: "Омут — тихая заводь",
   description: "Закинь удочку на заводи, собери альбом рыб и улучшай снасти.",
   alternates: { canonical: "/" },

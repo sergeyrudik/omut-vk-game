@@ -4,10 +4,10 @@
 рыбу, собирай альбом видов и улучшай снасти.
 
 - VK Mini App: _создайте приложение в кабинете VK и подставьте ID_
-- production: _URL Timeweb после деплоя_
+- production: [sergeyrudik-omut-vk-game-308d.twc1.net](https://sergeyrudik-omut-vk-game-308d.twc1.net/)
 - репозиторий: [sergeyrudik/omut-vk-game](https://github.com/sergeyrudik/omut-vk-game)
-- политика конфиденциальности: `/privacy/`
-- пользовательское соглашение: `/terms/`
+- политика конфиденциальности: [production/privacy/](https://sergeyrudik-omut-vk-game-308d.twc1.net/privacy/)
+- пользовательское соглашение: [production/terms/](https://sergeyrudik-omut-vk-game-308d.twc1.net/terms/)
 
 ## Стек
 
@@ -47,6 +47,12 @@ pnpm start
 | Директория сборки | `out` |
 | Команда запуска | `pnpm run timeweb:start` |
 | Автодеплой | включён для `main` |
+
+Production URL:
+
+```text
+https://sergeyrudik-omut-vk-game-308d.twc1.net/
+```
 
 ## Геймплей
 
