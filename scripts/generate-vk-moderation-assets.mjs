@@ -64,26 +64,30 @@ const shots = {
 
 for (const [name, copy] of Object.entries(shots)) {
   const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600">
+  <svg xmlns="http://www.w3.org/2000/svg" width="600" height="1200" viewBox="0 0 600 1200">
     <defs>
       <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#a8d0df"/>
-        <stop offset=".5" stop-color="#2a6f8a"/>
+        <stop offset=".45" stop-color="#2a6f8a"/>
         <stop offset="1" stop-color="#13252e"/>
       </linearGradient>
     </defs>
-    <rect width="1200" height="600" fill="url(#bg)"/>
-    <rect x="90" y="70" width="1020" height="460" rx="28" fill="#eef6f8" stroke="#8b5a2b" stroke-width="6"/>
-    <circle cx="210" cy="190" r="70" fill="#f0b35a"/>
-    <text x="340" y="170" fill="#13252e" font-family="Georgia, serif" font-size="64" font-weight="700">${copy.title}</text>
-    <text x="340" y="230" fill="#2a6f8a" font-family="Trebuchet MS, sans-serif" font-size="28" font-weight="700">${copy.subtitle}</text>
-    <text x="340" y="290" fill="#5a6d5f" font-family="Trebuchet MS, sans-serif" font-size="22">Омут — тихая заводь · VK Mini App</text>
-    <rect x="120" y="360" width="960" height="120" rx="20" fill="#dceef3" stroke="#7aa3b2" stroke-width="3"/>
-    <text x="160" y="430" fill="#13252e" font-family="Trebuchet MS, sans-serif" font-size="26" font-weight="700">Рыбалка · альбом · снасти · задания</text>
+    <rect width="600" height="1200" fill="url(#bg)"/>
+    <circle cx="480" cy="160" r="70" fill="#f0b35a" opacity=".9"/>
+    <rect x="40" y="220" width="520" height="760" rx="32" fill="#eef6f8" stroke="#8b5a2b" stroke-width="6"/>
+    <circle cx="300" cy="360" r="72" fill="#f0b35a"/>
+    <text x="300" y="385" text-anchor="middle" fill="#13252e" font-family="Georgia, serif" font-size="64" font-weight="700">О</text>
+    <text x="300" y="490" text-anchor="middle" fill="#13252e" font-family="Georgia, serif" font-size="56" font-weight="700">${copy.title}</text>
+    <text x="300" y="545" text-anchor="middle" fill="#2a6f8a" font-family="Trebuchet MS, sans-serif" font-size="24" font-weight="700">${copy.subtitle}</text>
+    <text x="300" y="600" text-anchor="middle" fill="#5a6d5f" font-family="Trebuchet MS, sans-serif" font-size="18">Омут — тихая заводь</text>
+    <rect x="80" y="660" width="440" height="240" rx="24" fill="#dceef3" stroke="#7aa3b2" stroke-width="3"/>
+    <text x="300" y="730" text-anchor="middle" fill="#13252e" font-family="Trebuchet MS, sans-serif" font-size="22" font-weight="700">Рыбалка · альбом</text>
+    <text x="300" y="770" text-anchor="middle" fill="#13252e" font-family="Trebuchet MS, sans-serif" font-size="22" font-weight="700">Снасти · задания</text>
+    <text x="300" y="840" text-anchor="middle" fill="#5a6d5f" font-family="Trebuchet MS, sans-serif" font-size="16">VK Mini App · 600×1200</text>
   </svg>`;
   await sharp(Buffer.from(svg))
     .jpeg({ quality: 92, mozjpeg: true })
-    .toFile(resolve(output, `screenshot-${name}-1200x600.jpg`));
+    .toFile(resolve(output, `screenshot-${name}-600x1200.jpg`));
 }
 
 await writeFile(
