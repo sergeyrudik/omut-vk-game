@@ -27,6 +27,7 @@ import {
   rollCatch,
   selectNewestSave,
   sellAllKeepnet,
+  sellFishValue,
   sellKeepnetFish,
   serializeSave,
   tickFight,
@@ -106,6 +107,7 @@ export default function HomePage() {
   const [adAvailable, setAdAvailable] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [splash, setSplash] = useState(false);
+  const [catchPopup, setCatchPopup] = useState<CaughtFish | null>(null);
 
   const [coins, setCoins] = useState(80);
   const [pearls, setPearls] = useState(2);
@@ -388,6 +390,7 @@ export default function HomePage() {
         return { ...fresh, catch: fresh.catch + 1 };
       });
       setLastResult(`${getFish(fish.fishId).icon} ${getFish(fish.fishId).name} · ${fish.weight} кг`);
+      setCatchPopup(fish);
       setSplash(true);
       window.setTimeout(() => setSplash(false), 450);
       pendingCatchRef.current = null;
@@ -596,7 +599,14 @@ export default function HomePage() {
       <div className="app-shell">
         <div className="start-screen">
           <div className="start-hero">
-            <div className="start-pier" aria-hidden />
+            <div className="start-scene" aria-hidden>
+              <div className="sun" />
+              <div className="mist" />
+              <div className="reed l" />
+              <div className="reed r" />
+              <div className="pier" />
+              <div className="bobber" />
+            </div>
             <h1 className="start-brand">Омут</h1>
             <p className="start-tagline">Тихая заводь — закинь удочку!</p>
             <button type="button" className="start-play" onClick={() => setStarted(true)}>
@@ -646,23 +656,34 @@ export default function HomePage() {
                   onClick={() => setLocation(loc.id)}
                 >
                   {loc.title}
+                  {!unlocked.includes(loc.id) ? " 🔒" : ""}
                 </button>
               ))}
             </div>
 
-            <div className="water-stage">
+            <div className={`water-stage loc-${location} ${phase}`}>
               <div className="stage-status">
                 {phase === "idle" && (lastResult ?? "Готов к забросу")}
-                {phase === "casting" && "Лови момент заброса…"}
-                {phase === "waiting" && "Тишина… жди поклёвку"}
-                {phase === "fighting" && "Вываживание! Держи натяжение"}
+                {phase === "casting" && "Лови момент — зелёная зона, жёлтая = идеал"}
+                {phase === "waiting" && "Тишина… поплавок дрожит"}
+                {phase === "fighting" && "Вываживание! Удерживай натяжение в зелёной зоне"}
               </div>
+              <div className="scene-reed a" />
+              <div className="scene-reed b" />
               <div className="pier-plank" />
+              <div className="cast-line" />
+              <div className="bobber-live" />
+              <div className="ripple" />
             </div>
 
-            <p className="muted">
-              Наживка: {BAIT_DATA[selectedBait].icon} {bait[selectedBait]} · Садок {keepnet.length}/{capacity}
-            </p>
+            <div className="hud-row">
+              <span className="keepnet-meta">
+                {BAIT_DATA[selectedBait].icon} {BAIT_DATA[selectedBait].title}: {bait[selectedBait]}
+              </span>
+              <span className="keepnet-meta">
+                Садок {keepnet.length}/{capacity}
+              </span>
+            </div>
 
             <div className="bait-row">
               {(Object.keys(BAIT_DATA) as BaitId[]).map((id) => (
@@ -678,15 +699,30 @@ export default function HomePage() {
             </div>
 
             {phase === "casting" && (
-              <div className="cast-meter">
-                <div className="cast-zone" style={{ left: "28%", width: "44%" }} />
-                <div className="cast-needle" style={{ left: `${castPos * 100}%` }} />
-              </div>
+              <>
+                <div className="meter-label">
+                  <span>Заброс</span>
+                  <span>Стоп в зоне</span>
+                </div>
+                <div className="cast-meter">
+                  <div className="cast-zone" style={{ left: "28%", width: "44%" }} />
+                  <div className="cast-perfect" />
+                  <div className="cast-needle" style={{ left: `${castPos * 100}%` }} />
+                </div>
+              </>
             )}
 
             {phase === "fighting" && (
               <>
-                <div className="fight-meter">
+                <div className="meter-label">
+                  <span>Натяжение</span>
+                  <span>{Math.round(fight.progress * 100)}%</span>
+                </div>
+                <div
+                  className={`fight-meter${
+                    fight.tension < fight.window.min || fight.tension > fight.window.max ? " danger" : ""
+                  }`}
+                >
                   <div
                     className="fight-zone"
                     style={{
@@ -705,27 +741,31 @@ export default function HomePage() {
             <div className="btn-row">
               {phase === "idle" && (
                 <button type="button" className="btn" onClick={startCast}>
-                  Заброс
+                  🎣 Заброс
                 </button>
               )}
               {phase === "casting" && (
                 <button type="button" className="btn" onClick={lockCast}>
-                  Стоп!
+                  ⏱ Стоп!
                 </button>
               )}
               {phase === "fighting" && (
                 <button
                   type="button"
-                  className="btn"
+                  className={`btn${holding ? " hold-active" : ""}`}
                   onPointerDown={() => setHolding(true)}
                   onPointerUp={() => setHolding(false)}
                   onPointerLeave={() => setHolding(false)}
                   onPointerCancel={() => setHolding(false)}
                 >
-                  {holding ? "Тяну…" : "Удерживай"}
+                  {holding ? "⬆ Тяну…" : "✋ Удерживай"}
                 </button>
               )}
-              {phase === "waiting" && <button type="button" className="btn secondary" disabled>Ждём…</button>}
+              {phase === "waiting" && (
+                <button type="button" className="btn secondary" disabled>
+                  …ждём поклёвку
+                </button>
+              )}
               <button type="button" className="btn secondary" onClick={() => void watchRewardAd()}>
                 +{REWARD_BAIT} наживки за рекламу
               </button>
@@ -735,6 +775,7 @@ export default function HomePage() {
               <div className="list" style={{ marginTop: 12 }}>
                 {keepnet.map((fish) => {
                   const def = getFish(fish.fishId);
+                  const price = sellFishValue(fish);
                   return (
                     <div key={fish.uid} className="card">
                       <div>
@@ -742,7 +783,8 @@ export default function HomePage() {
                           {def.icon} {def.name}
                         </h3>
                         <p>
-                          {fish.weight} кг · {RARITY_LABEL[fish.rarity]}
+                          <span className={`rarity-dot rarity-${fish.rarity}`} />
+                          {fish.weight} кг · {RARITY_LABEL[fish.rarity]} · {price}🪙
                         </p>
                       </div>
                       <button type="button" className="btn secondary" onClick={() => sellOne(fish.uid)}>
@@ -823,10 +865,17 @@ export default function HomePage() {
               {FISH_CATALOG.map((fish) => {
                 const count = album[fish.id] ?? 0;
                 return (
-                  <div key={fish.id} className={`album-cell${count ? "" : " locked"}`}>
+                  <div
+                    key={fish.id}
+                    className={`album-cell${count ? " owned" : " locked"} rarity-border-${fish.rarity}`}
+                  >
                     <span className="icon">{count ? fish.icon : "❔"}</span>
                     {count ? fish.name : "???"}
-                    {count > 0 && <div className="muted">×{count}</div>}
+                    {count > 0 && (
+                      <div className="muted">
+                        <span className={`rarity-dot rarity-${fish.rarity}`} />×{count}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -843,13 +892,17 @@ export default function HomePage() {
                 const progress = daily[quest.field];
                 const claimed = daily.claimed.includes(quest.id);
                 const ready = progress >= quest.target && !claimed;
+                const pct = Math.min(100, Math.round((progress / quest.target) * 100));
                 return (
                   <div key={quest.id} className="card">
-                    <div>
+                    <div style={{ flex: 1 }}>
                       <h3>{quest.title}</h3>
                       <p>
                         {quest.description} · {Math.min(progress, quest.target)}/{quest.target}
                       </p>
+                      <div className="quest-bar">
+                        <div className="quest-fill" style={{ width: `${pct}%` }} />
+                      </div>
                     </div>
                     <button type="button" className="btn" disabled={!ready} onClick={() => claimQuest(quest.id)}>
                       {claimed ? "Готово" : ready ? "Забрать" : "Ещё"}
@@ -917,9 +970,29 @@ export default function HomePage() {
         ))}
       </nav>
 
+      {catchPopup && (
+        <div className="overlay catch-overlay" onClick={() => setCatchPopup(null)}>
+          <div className="overlay-card" onClick={(event) => event.stopPropagation()}>
+            <div className="catch-icon">{getFish(catchPopup.fishId).icon}</div>
+            <h3>Улов!</h3>
+            <p>
+              <strong>{getFish(catchPopup.fishId).name}</strong>
+              <br />
+              <span className={`rarity-dot rarity-${catchPopup.rarity}`} />
+              {RARITY_LABEL[catchPopup.rarity]} · {catchPopup.weight} кг
+              <br />
+              Можно продать за {sellFishValue(catchPopup)}🪙
+            </p>
+            <button type="button" className="btn" onClick={() => setCatchPopup(null)}>
+              В садок
+            </button>
+          </div>
+        </div>
+      )}
+
       {message && (
         <div className="overlay" onClick={() => setMessage(null)}>
-          <div className="overlay-card">
+          <div className="overlay-card" onClick={(event) => event.stopPropagation()}>
             <h3>Омут</h3>
             <p>{message}</p>
             <button type="button" className="btn" onClick={() => setMessage(null)}>
