@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import bridge from "@vkontakte/vk-bridge";
+import { createVkBridge, readStoredValue, writeStoredValue } from "./vk-runtime";
 import Link from "next/link";
 import {
   BAIT_DATA,
@@ -220,25 +221,26 @@ export default function HomePage() {
   useEffect(() => {
     let cancelled = false;
     const hydrate = async () => {
-      const localSave = migrateSave(localStorage.getItem(SAVE_KEY));
+      const localSave = migrateSave(readStoredValue(SAVE_KEY));
       let cloudSave: GameSave | null = null;
       try {
         await promiseWithTimeout(bridge.send("VKWebAppInit"), 1800);
         if (cancelled) return;
-        bridgeRef.current = bridge as unknown as VKBridge;
+        bridgeRef.current = createVkBridge(bridge as unknown as VKBridge);
         setVkReady(true);
         try {
-          await bridgeRef.current.send("VKWebAppSetViewSettings", {
+          void bridgeRef.current.send("VKWebAppSetViewSettings", {
             status_bar_style: "light",
             action_bar_color: "#1f5a6e",
             navigation_bar_color: "#1f5a6e",
-          });
+          }).catch(() => undefined);
         } catch {
           // optional
         }
         try {
-          const user = (await bridgeRef.current.send("VKWebAppGetUserInfo")) as VKUser;
-          setVkUser(user);
+          void bridgeRef.current.send("VKWebAppGetUserInfo").then((user) => {
+            if (!cancelled) setVkUser(user as VKUser);
+          }).catch(() => undefined);
         } catch {
           // optional
         }
@@ -290,7 +292,7 @@ export default function HomePage() {
       };
       const value = serializeSave(save);
       try {
-        localStorage.setItem(SAVE_KEY, value);
+        writeStoredValue(SAVE_KEY, value);
       } catch {
         trackEvent("save_write_error", { source: "local" });
       }
@@ -528,6 +530,11 @@ export default function HomePage() {
   };
 
   const watchRewardAd = async () => {
+    if (!bridgeRef.current || !adAvailable) {
+      setMessage("Реклама пока недоступна");
+      void checkRewardAvailability();
+      return;
+    }
     const fresh = refreshRewards(rewards);
     const now = Date.now();
     if (fresh.count >= REWARD_DAILY_LIMIT) {
@@ -543,7 +550,7 @@ export default function HomePage() {
         const response = (await bridgeRef.current.send("VKWebAppShowNativeAds", {
           ad_format: "reward",
         })) as { result?: boolean };
-        if (!response.result) {
+        if (response.result !== true) {
           setMessage("Реклама недоступна");
           return;
         }

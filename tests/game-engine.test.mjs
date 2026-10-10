@@ -74,3 +74,16 @@ test("save migrate and newest", () => {
   assert.ok(b);
   assert.equal(selectNewestSave(a, b)?.coins, 500);
 });
+
+
+test("migration preserves timestamps, reward cooldown and newest cloud progress", () => {
+  const now = Date.now();
+  const saved = createDefaultSave();
+  saved.updatedAt = now - 1000;
+  saved.rewards.lastRewardAt = now - 500;
+  const local = migrateSave(JSON.stringify(saved));
+  const cloud = migrateSave(JSON.stringify({ ...saved, updatedAt: now }));
+  assert.equal(local.updatedAt, now - 1000);
+  assert.equal(local.rewards.lastRewardAt, now - 500);
+  assert.equal(selectNewestSave(local, cloud), cloud);
+});

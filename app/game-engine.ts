@@ -294,13 +294,13 @@ export function migrateSave(raw: string | null | undefined): GameSave | null {
             location: (["backwater", "lake", "night"].includes(item.location)
               ? item.location
               : "backwater") as LocationId,
-            caughtAt: clampInt(item.caughtAt, Date.now()),
+            caughtAt: clampInt(item.caughtAt, Date.now(), 0, Number.MAX_SAFE_INTEGER),
           }))
       : [];
 
     return {
       version: 1,
-      updatedAt: clampInt(parsed.updatedAt, Date.now(), 0),
+      updatedAt: clampInt(parsed.updatedAt, Date.now(), 0, Number.MAX_SAFE_INTEGER),
       coins: clampInt(parsed.coins, base.coins, 0, 999_999),
       pearls: clampInt(parsed.pearls, base.pearls, 0, 9999),
       bait,
@@ -343,7 +343,7 @@ export function migrateSave(raw: string | null | undefined): GameSave | null {
       rewards: {
         date: typeof parsed.rewards?.date === "string" ? parsed.rewards.date : getLocalDateKey(),
         count: clampInt(parsed.rewards?.count, 0),
-        lastRewardAt: clampInt(parsed.rewards?.lastRewardAt, 0),
+        lastRewardAt: clampInt(parsed.rewards?.lastRewardAt, 0, 0, Number.MAX_SAFE_INTEGER),
       },
       nextFishUid: clampInt(parsed.nextFishUid, 1, 1),
     };
