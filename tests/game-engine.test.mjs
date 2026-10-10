@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  FISH_CATALOG,
   evaluateCast,
+  gatherEmergencyBait,
+  buyBait,
   getKeepnetCapacity,
   getUnlockedLocations,
   getUpgradeCost,
@@ -86,4 +89,70 @@ test("migration preserves timestamps, reward cooldown and newest cloud progress"
   assert.equal(local.updatedAt, now - 1000);
   assert.equal(local.rewards.lastRewardAt, now - 500);
   assert.equal(selectNewestSave(local, cloud), cloud);
+});
+
+
+test("exhausting all starter and purchased bait cannot permanently lock fishing", () => {
+  const save = createDefaultSave();
+  const empty = { worm: 0, bread: 0, spinner: 0, fly: 0 };
+  // 27 starter casts, 3 five-worm packs for 75 coins, daily +60 coins,
+  // then 2 more packs for 50 coins: 52 misses leave 15 coins and no bait.
+  let budget = save.coins;
+  for (let i = 0; i < 3; i++) budget = buyBait(empty, budget, "worm", 5).coins;
+  budget += 60;
+  for (let i = 0; i < 2; i++) budget = buyBait(empty, budget, "worm", 5).coins;
+  assert.equal(budget, 15);
+  const recovered = gatherEmergencyBait(empty, budget, []);
+  assert.deepEqual(recovered, { ...empty, worm: 1 });
+  assert.deepEqual(empty, { worm: 0, bread: 0, spinner: 0, fly: 0 });
+  assert.equal(gatherEmergencyBait(recovered, budget, []), null);
+  const restored = migrateSave(serializeSave({ ...save, coins: budget, bait: recovered }));
+  assert.equal(restored.bait.worm, 1);
+  assert.equal(restored.coins, budget);
+});
+
+test("emergency bait is unavailable while normal fishing resources remain", () => {
+  const empty = { worm: 0, bread: 0, spinner: 0, fly: 0 };
+  assert.equal(gatherEmergencyBait(empty, 25, []), null);
+  assert.equal(gatherEmergencyBait({ ...empty, fly: 1 }, 0, []), null);
+  assert.equal(gatherEmergencyBait(empty, 0, [{ uid: 1 }]), null);
+  assert.deepEqual(gatherEmergencyBait(empty, 24, []), { ...empty, worm: 1 });
+});
+
+
+test("all 24 album fish are obtainable from documented locations and rarities", () => {
+  const rolls = { legendary: 0.005, epic: 0.02, rare: 0.1, uncommon: 0.3, common: 0.8 };
+  const save = createDefaultSave();
+  const album = {};
+  let uid = 1;
+  for (const def of FISH_CATALOG) {
+    const location = def.locations[0];
+    const pool = FISH_CATALOG.filter((fish) => fish.locations.includes(location) && fish.rarity === def.rarity);
+    const values = [rolls[def.rarity], (pool.findIndex((fish) => fish.id === def.id) + 0.5) / pool.length, 0.5];
+    const catchResult = rollCatch(location, save.upgrades, "worm", "ok", uid++, () => values.shift());
+    assert.equal(catchResult.fishId, def.id);
+    assert.ok(catchResult.weight >= def.minWeight && catchResult.weight <= def.maxWeight);
+    assert.ok(sellFishValue(catchResult) > 0);
+    album[def.id] = 1;
+  }
+  assert.deepEqual(albumProgress(album), { caught: 24, total: 24 });
+  const restored = migrateSave(serializeSave({ ...save, album }));
+  assert.deepEqual(albumProgress(restored.album), { caught: 24, total: 24 });
+});
+
+test("location thresholds and bait purchases preserve currency on failure", () => {
+  assert.deepEqual(getUnlockedLocations(11), ["backwater"]);
+  assert.deepEqual(getUnlockedLocations(12), ["backwater", "lake"]);
+  assert.deepEqual(getUnlockedLocations(34), ["backwater", "lake"]);
+  assert.deepEqual(getUnlockedLocations(35), ["backwater", "lake", "night"]);
+  const bait = createDefaultSave().bait;
+  const failure = buyBait(bait, 24, "worm", 5);
+  assert.equal(failure.ok, false);
+  assert.equal(failure.coins, 24);
+  assert.deepEqual(failure.bait, bait);
+  const bought = buyBait(bait, 25, "worm", 5);
+  assert.equal(bought.ok, true);
+  assert.equal(bought.coins, 0);
+  assert.equal(bought.bait.worm, bait.worm + 5);
+  assert.equal(bait.worm, 20);
 });

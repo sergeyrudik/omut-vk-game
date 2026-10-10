@@ -539,3 +539,16 @@ export function buyBait(
     ok: true,
   };
 }
+
+/** A player who exhausted all affordable bait can recover without ads or reset. */
+export function gatherEmergencyBait(
+  bait: Record<BaitId, number>,
+  coins: number,
+  keepnet: readonly CaughtFish[],
+): Record<BaitId, number> | null {
+  const cheapestPack = Math.min(...Object.values(BAIT_DATA).map((item) => item.cost)) * 5;
+  if (Object.values(bait).some((count) => count > 0) || keepnet.length > 0 || coins >= cheapestPack) {
+    return null;
+  }
+  return { ...bait, worm: 1 };
+}

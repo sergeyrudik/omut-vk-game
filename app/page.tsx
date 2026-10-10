@@ -17,6 +17,7 @@ import {
   createFightState,
   evaluateCast,
   getFish,
+  gatherEmergencyBait,
   getKeepnetCapacity,
   getUnlockedLocations,
   getUpgradeCost,
@@ -770,6 +771,21 @@ export default function HomePage() {
               {phase === "waiting" && (
                 <button type="button" className="btn secondary" disabled>
                   …ждём поклёвку
+                </button>
+              )}
+              {phase === "idle" && gatherEmergencyBait(bait, coins, keepnet) && (
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={() => {
+                    const recovered = gatherEmergencyBait(bait, coins, keepnet);
+                    if (!recovered) return;
+                    setBait(recovered);
+                    setSelectedBait("worm");
+                    setMessage("Нашёл одного червяка — можно снова рыбачить");
+                  }}
+                >
+                  Собрать наживку · +1 червяк
                 </button>
               )}
               <button type="button" className="btn secondary" onClick={() => void watchRewardAd()}>
