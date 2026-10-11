@@ -8,10 +8,12 @@ import { createAdPolicy } from "./ad-policy";
 import { attemptEconomyInterstitial, requestEconomyReward } from "./economy-ads";
 import {
   BAIT_DATA,
+  BAIT_CAP,
   FISH_CATALOG,
   LOCATION_DATA,
   RARITY_LABEL,
   UPGRADE_DATA,
+  MAX_UPGRADE_LEVEL,
   albumProgress,
   betterRarity,
   buyBait,
@@ -477,6 +479,11 @@ export default function HomePage() {
   const lockCast = () => {
     if (phase !== "casting" || paused || getAdPolicy().isBusy()) return;
     if (castRaf.current) window.cancelAnimationFrame(castRaf.current);
+    if ((bait[selectedBait] ?? 0) <= 0) {
+      setPhase("idle");
+      setMessage("Нет выбранной наживки — выбери другую или пополни запас");
+      return;
+    }
     const quality = evaluateCast(castPos);
     setBait((prev) => ({ ...prev, [selectedBait]: Math.max(0, prev[selectedBait] - 1) }));
     setStats((prev) => ({ ...prev, casts: prev.casts + 1 }));
@@ -501,6 +508,8 @@ export default function HomePage() {
     setPhase("waiting");
     setLastResult(quality === "perfect" ? "Идеальный заброс!" : "Заброс удался");
     biteTimeout.current = window.setTimeout(() => {
+      biteTimeout.current = null;
+      if (!pendingCatchRef.current) return;
       setFight(createFightState(upgrades));
       setPhase("fighting");
       setHolding(false);
@@ -514,8 +523,44 @@ export default function HomePage() {
     };
   }, []);
 
+  const cancelFishing = useCallback(() => {
+    if (biteTimeout.current !== null) window.clearTimeout(biteTimeout.current);
+    if (castRaf.current !== null) window.cancelAnimationFrame(castRaf.current);
+    if (fightRaf.current !== null) window.cancelAnimationFrame(fightRaf.current);
+    biteTimeout.current = null;
+    castRaf.current = null;
+    fightRaf.current = null;
+    pendingCatchRef.current = null;
+    holdingRef.current = false;
+    castDir.current = 1;
+    const freshFight = createFightState({ rod: 0, line: 0, keepnet: 0 });
+    fightRef.current = freshFight;
+    setFight(freshFight);
+    setHolding(false);
+    setCastPos(0);
+    setPhase("idle");
+    setCatchPopup(null);
+    setLastResult(null);
+    setSplash(false);
+  }, []);
+
+  const resetProgress = () => {
+    if (getAdPolicy().isBusy()) return;
+    cancelFishing();
+    const fresh = createDefaultSave();
+    fresh.rewards = refreshRewards(rewards);
+    applySave(fresh);
+    setTab("water");
+    setStarted(false);
+    setMessage("Прогресс сброшен");
+  };
+
   const buyUpgrade = (key: UpgradeKey) => {
     if (paused || getAdPolicy().isBusy()) return;
+    if (upgrades[key] >= MAX_UPGRADE_LEVEL) {
+      setMessage("Максимальный уровень улучшения");
+      return;
+    }
     const cost = getUpgradeCost(upgrades[key]);
     if (pearls < cost) {
       setMessage("Не хватает жемчуга");
@@ -694,6 +739,7 @@ export default function HomePage() {
                   key={id}
                   type="button"
                   className={`bait-pill${selectedBait === id ? " active" : ""}`}
+                  disabled={phase !== "idle"}
                   onClick={() => setSelectedBait(id)}
                 >
                   {BAIT_DATA[id].icon} {BAIT_DATA[id].title} · {bait[id]}
@@ -837,8 +883,8 @@ export default function HomePage() {
                         {data.description}. {data.bonus(upgrades[key])}
                       </p>
                     </div>
-                    <button type="button" className="btn" onClick={() => buyUpgrade(key)}>
-                      💎 {cost}
+                    <button type="button" className="btn" disabled={upgrades[key] >= MAX_UPGRADE_LEVEL} onClick={() => buyUpgrade(key)}>
+                      {upgrades[key] >= MAX_UPGRADE_LEVEL ? "Максимум" : `💎 ${cost}`}
                     </button>
                   </div>
                 );
@@ -856,17 +902,18 @@ export default function HomePage() {
                   <button
                     type="button"
                     className="btn secondary"
+                    disabled={bait[id] + 5 > BAIT_CAP}
                     onClick={() => {
                       const result = buyBait(bait, coins, id, 5);
                       if (!result.ok) {
-                        setMessage("Не хватает монет");
+                        setMessage(bait[id] + 5 > BAIT_CAP ? "Недостаточно места для 5 наживок" : "Не хватает монет");
                         return;
                       }
                       setBait(result.bait);
                       setCoins(result.coins);
                     }}
                   >
-                    Купить
+                    {bait[id] + 5 > BAIT_CAP ? "Запас полон" : "Купить"}
                   </button>
                 </div>
               ))}
@@ -955,12 +1002,7 @@ export default function HomePage() {
               <button
                 type="button"
                 className="btn danger"
-                onClick={() => {
-                  applySave(createDefaultSave());
-                  setStarted(false);
-                  setPhase("idle");
-                  setMessage("Прогресс сброшен");
-                }}
+                onClick={resetProgress}
               >
                 Сбросить прогресс
               </button>

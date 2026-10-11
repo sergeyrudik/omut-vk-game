@@ -1,3 +1,5 @@
+export const MAX_UPGRADE_LEVEL = 20;
+
 export type Rarity = "common" | "uncommon" | "rare" | "epic" | "legendary";
 export type LocationId = "backwater" | "lake" | "night";
 export type BaitId = "worm" | "bread" | "spinner" | "fly";
@@ -311,9 +313,9 @@ export function migrateSave(raw: string | null | undefined): GameSave | null {
         ? parsed.location
         : "backwater") as LocationId,
       upgrades: {
-        rod: clampInt(parsed.upgrades?.rod, 0, 0, 20),
-        line: clampInt(parsed.upgrades?.line, 0, 0, 20),
-        keepnet: clampInt(parsed.upgrades?.keepnet, 0, 0, 20),
+        rod: clampInt(parsed.upgrades?.rod, 0, 0, MAX_UPGRADE_LEVEL),
+        line: clampInt(parsed.upgrades?.line, 0, 0, MAX_UPGRADE_LEVEL),
+        keepnet: clampInt(parsed.upgrades?.keepnet, 0, 0, MAX_UPGRADE_LEVEL),
       },
       keepnet,
       album,
@@ -537,6 +539,7 @@ export function buyBait(
   id: BaitId,
   count = 5,
 ): { bait: Record<BaitId, number>; coins: number; ok: boolean } {
+  if (!Number.isInteger(count) || count <= 0 || bait[id] + count > BAIT_CAP) return { bait, coins, ok: false };
   const cost = BAIT_DATA[id].cost * count;
   if (coins < cost) return { bait, coins, ok: false };
   return {
