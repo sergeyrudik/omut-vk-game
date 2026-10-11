@@ -140,6 +140,7 @@ export default function HomePage() {
   const [holding, setHolding] = useState(false);
   const [fight, setFight] = useState(() => createFightState({ rod: 0, line: 0, keepnet: 0 }));
   const [lastResult, setLastResult] = useState<string | null>(null);
+  const fishingPaused = paused || tab !== "water" || !!message;
 
   const bridgeRef = useRef<VKBridge | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -366,11 +367,22 @@ export default function HomePage() {
   }, [holding]);
 
   useEffect(() => {
+    if (fishingPaused) {
+      holdingRef.current = false;
+      let cancelled = false;
+      void Promise.resolve().then(() => {
+        if (!cancelled) setHolding(false);
+      });
+      return () => { cancelled = true; };
+    }
+  }, [fishingPaused]);
+
+  useEffect(() => {
     fightRef.current = fight;
   }, [fight]);
 
   useEffect(() => {
-    if (phase !== "casting" || paused) return;
+    if (phase !== "casting" || fishingPaused) return;
     const step = () => {
       setCastPos((prev) => {
         let next = prev + castDir.current * 0.018;
@@ -389,7 +401,7 @@ export default function HomePage() {
     return () => {
       if (castRaf.current) window.cancelAnimationFrame(castRaf.current);
     };
-  }, [phase, paused]);
+  }, [phase, fishingPaused]);
 
   const finishEscape = useCallback(async () => {
     const generation = fishingGenerationRef.current;
@@ -419,7 +431,7 @@ export default function HomePage() {
   }, [commitSave, playSound, trackEvent]);
 
   useEffect(() => {
-    if (phase !== "fighting" || paused) return;
+    if (phase !== "fighting" || fishingPaused) return;
     let last = performance.now();
     const step = (now: number) => {
       const dt = Math.min(2.5, (now - last) / 16.67);
@@ -442,7 +454,7 @@ export default function HomePage() {
     return () => {
       if (fightRaf.current) window.cancelAnimationFrame(fightRaf.current);
     };
-  }, [finishCatch, finishEscape, phase, paused]);
+  }, [finishCatch, finishEscape, phase, fishingPaused]);
 
   const maybeShowInterstitial = useCallback(async (boundary: "sale-one" | "sale-all") => {
     const client = bridgeRef.current;
