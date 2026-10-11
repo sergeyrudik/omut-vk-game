@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import bridge from "@vkontakte/vk-bridge";
 import { createVkBridge, readStoredValue, writeStoredValue } from "./vk-runtime";
 import Link from "next/link";
+import { createAdPolicy } from "./ad-policy";
+import { attemptEconomyInterstitial, requestEconomyReward } from "./economy-ads";
 import {
   BAIT_DATA,
   FISH_CATALOG,
@@ -22,6 +24,7 @@ import {
   getUnlockedLocations,
   getUpgradeCost,
   grantBaitPack,
+  rewardBaitAmount,
   migrateSave,
   refreshDaily,
   refreshRewards,
@@ -59,7 +62,6 @@ const VK_SAVE_KEY = "omut_save";
 const REWARD_BAIT = 8;
 const REWARD_COOLDOWN_MS = 3 * 60 * 1000;
 const REWARD_DAILY_LIMIT = 8;
-const INTERSTITIAL_INTERVAL_MS = 3 * 60 * 1000;
 const VK_APP_URL = "https://vk.com/app54694439";
 
 const DAILY_QUESTS = [
@@ -106,6 +108,8 @@ export default function HomePage() {
   const [vkUser, setVkUser] = useState<VKUser | null>(null);
   const [paused, setPaused] = useState(false);
   const [adAvailable, setAdAvailable] = useState(false);
+  const [interstitialBusy, setInterstitialBusy] = useState(false);
+  const [rewardBusy, setRewardBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [splash, setSplash] = useState(false);
   const [catchPopup, setCatchPopup] = useState<CaughtFish | null>(null);
@@ -134,7 +138,14 @@ export default function HomePage() {
 
   const bridgeRef = useRef<VKBridge | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const lastInterstitialRef = useRef(0);
+  const adPolicyRef = useRef<ReturnType<typeof createAdPolicy> | null>(null);
+  const getAdPolicy = useCallback(() => {
+    if (!adPolicyRef.current) adPolicyRef.current = createAdPolicy({
+      storageKey: "omut:ad-policy:v1", onInterstitialBusyChange: setInterstitialBusy,
+    });
+    return adPolicyRef.current;
+  }, []);
+  useEffect(() => { if (hydrated && started) getAdPolicy().startGameplay(); }, [hydrated, started, getAdPolicy]);
   const castDir = useRef(1);
   const castRaf = useRef<number | null>(null);
   const fightRaf = useRef<number | null>(null);
@@ -149,8 +160,8 @@ export default function HomePage() {
   const tutorialText = useMemo(() => {
     if (tutorialDone) return null;
     if (tutorialStep === 0) return "Выбери наживку и нажми «Заброс». Останови стрелку в зелёной зоне.";
-    if (tutorialStep === 1) return "Дождись поклёвки, затем удерживай кнопку, чтобы леска не порвалась.";
-    return "Продай рыбу или оставь в альбоме. Улучшай снасти на вкладке «Снасти».";
+    if (tutorialStep === 1) return "Дождись поклёвки, затем удерживай и отпускай кнопку, чтобы держать натяжение в зелёной зоне.";
+    return "Рыба автоматически добавляется в альбом. Продай улов из садка и улучшай снасти на вкладке «Снасти».";
   }, [tutorialDone, tutorialStep]);
 
   const playSound = useCallback(
@@ -203,9 +214,10 @@ export default function HomePage() {
     setTutorialStep(save.tutorialDone ? 2 : save.tutorialStep);
     setStats(save.stats);
     setDaily(refreshDaily(save.daily));
+    getAdPolicy().seedLastAdAt(save.rewards.lastRewardAt);
     setRewards(refreshRewards(save.rewards));
     setNextFishUid(save.nextFishUid);
-  }, []);
+  }, [getAdPolicy]);
 
   const checkRewardAvailability = useCallback(async () => {
     if (!bridgeRef.current) return;
@@ -436,24 +448,17 @@ export default function HomePage() {
     };
   }, [finishCatch, finishEscape, phase, paused]);
 
-  const maybeShowInterstitial = useCallback(async () => {
-    if (!bridgeRef.current) return;
-    const now = Date.now();
-    if (now - lastInterstitialRef.current < INTERSTITIAL_INTERVAL_MS) return;
-    try {
-      const check = (await bridgeRef.current.send("VKWebAppCheckNativeAds", {
-        ad_format: "interstitial",
-      })) as { result?: boolean };
-      if (!check.result) return;
-      await bridgeRef.current.send("VKWebAppShowNativeAds", { ad_format: "interstitial" });
-      lastInterstitialRef.current = now;
-    } catch {
-      // optional
-    }
-  }, []);
+  const maybeShowInterstitial = useCallback(async (boundary: "sale-one" | "sale-all") => {
+    const client = bridgeRef.current;
+    if (!client || !started || catchPopup) return false;
+    return attemptEconomyInterstitial(getAdPolicy(), "omut", boundary, {
+      send: (method, params) => client.send(method, params), ready: vkReady, paused, phase,
+    });
+  }, [getAdPolicy, started, catchPopup, vkReady, paused, phase]);
 
   const startCast = () => {
-    if (phase !== "idle" || paused) return;
+    if (phase !== "idle" || paused || getAdPolicy().isBusy()) return;
+    getAdPolicy().startGameplay();
     if ((bait[selectedBait] ?? 0) <= 0) {
       setMessage("Нет наживки — купи на снастях или посмотри рекламу");
       return;
@@ -470,7 +475,7 @@ export default function HomePage() {
   };
 
   const lockCast = () => {
-    if (phase !== "casting") return;
+    if (phase !== "casting" || paused || getAdPolicy().isBusy()) return;
     if (castRaf.current) window.cancelAnimationFrame(castRaf.current);
     const quality = evaluateCast(castPos);
     setBait((prev) => ({ ...prev, [selectedBait]: Math.max(0, prev[selectedBait] - 1) }));
@@ -510,6 +515,7 @@ export default function HomePage() {
   }, []);
 
   const buyUpgrade = (key: UpgradeKey) => {
+    if (paused || getAdPolicy().isBusy()) return;
     const cost = getUpgradeCost(upgrades[key]);
     if (pearls < cost) {
       setMessage("Не хватает жемчуга");
@@ -521,6 +527,7 @@ export default function HomePage() {
   };
 
   const claimQuest = (id: string) => {
+    if (paused || getAdPolicy().isBusy()) return;
     const quest = DAILY_QUESTS.find((item) => item.id === id);
     if (!quest) return;
     const fresh = refreshDaily(daily);
@@ -531,43 +538,27 @@ export default function HomePage() {
   };
 
   const watchRewardAd = async () => {
-    if (!bridgeRef.current || !adAvailable) {
-      setMessage("Реклама пока недоступна");
-      void checkRewardAvailability();
-      return;
-    }
+    if (paused || phase !== "idle" || catchPopup || getAdPolicy().isBusy()) return;
+    const client = bridgeRef.current;
     const fresh = refreshRewards(rewards);
-    const now = Date.now();
-    if (fresh.count >= REWARD_DAILY_LIMIT) {
-      setMessage("Дневной лимит наград исчерпан");
-      return;
-    }
-    if (now - fresh.lastRewardAt < REWARD_COOLDOWN_MS) {
-      setMessage("Подождите немного");
-      return;
-    }
-    if (bridgeRef.current && adAvailable) {
-      try {
-        const response = (await bridgeRef.current.send("VKWebAppShowNativeAds", {
-          ad_format: "reward",
-        })) as { result?: boolean };
-        if (response.result !== true) {
-          setMessage("Реклама недоступна");
-          return;
-        }
-      } catch {
-        setMessage("Не удалось показать рекламу");
-        return;
-      }
-    }
-    setRewards({ date: fresh.date, count: fresh.count + 1, lastRewardAt: now });
-    setStats((prev) => ({ ...prev, adsWatched: prev.adsWatched + 1 }));
-    setBait((prev) => grantBaitPack(prev, REWARD_BAIT));
-    setMessage(`+${REWARD_BAIT} червяков`);
+    const outcome = await requestEconomyReward({
+      policy: getAdPolicy(), send: (method, params) => client!.send(method, params),
+      available: !!client && vkReady && adAvailable, count: fresh.count, lastRewardAt: fresh.lastRewardAt,
+      dailyLimit: REWARD_DAILY_LIMIT, cooldownMs: REWARD_COOLDOWN_MS,
+      rewardValue: rewardBaitAmount(bait, REWARD_BAIT), onBusyChange: setRewardBusy,
+      onGranted: (watchedAt, amount) => {
+        setRewards((prev) => { const current = refreshRewards(prev); return { ...current, count: current.count + 1, lastRewardAt: watchedAt }; });
+        setStats((prev) => ({ ...prev, adsWatched: prev.adsWatched + 1 }));
+        setBait((prev) => grantBaitPack(prev, amount));
+        setMessage(`Червяки за рекламу: +${amount}`);
+      },
+    });
+    if (outcome !== "granted") setMessage(outcome === "wait" ? "Подождите немного" : outcome === "daily-limit" ? "Дневной лимит наград исчерпан" : outcome === "no-value" ? "Запас червяков полон" : "Реклама пока недоступна");
     void checkRewardAvailability();
   };
 
   const sellOne = (uid: number) => {
+    if (paused || phase !== "idle" || catchPopup || getAdPolicy().isBusy()) return;
     const result = sellKeepnetFish(keepnet, uid);
     if (!result.coins) return;
     setKeepnet(result.keepnet);
@@ -577,10 +568,11 @@ export default function HomePage() {
       const fresh = refreshDaily(prev);
       return { ...fresh, sell: fresh.sell + 1 };
     });
-    void maybeShowInterstitial();
+    void maybeShowInterstitial("sale-one");
   };
 
   const sellAll = () => {
+    if (paused || phase !== "idle" || catchPopup || getAdPolicy().isBusy()) return;
     const count = keepnet.length;
     const result = sellAllKeepnet(keepnet);
     if (!result.coins) return;
@@ -591,6 +583,7 @@ export default function HomePage() {
       const fresh = refreshDaily(prev);
       return { ...fresh, sell: fresh.sell + count };
     });
+    void maybeShowInterstitial("sale-all");
   };
 
   if (!hydrated) {
@@ -629,8 +622,11 @@ export default function HomePage() {
     );
   }
 
+  const rewardBait = rewardBaitAmount(bait, REWARD_BAIT);
+
   return (
     <div className="app-shell">
+      <fieldset disabled={interstitialBusy || rewardBusy} style={{ display: "contents" }}>
       <div className="game-frame">
         <header className="topbar">
           <div>
@@ -778,6 +774,7 @@ export default function HomePage() {
                   type="button"
                   className="btn secondary"
                   onClick={() => {
+                    if (paused || getAdPolicy().isBusy()) return;
                     const recovered = gatherEmergencyBait(bait, coins, keepnet);
                     if (!recovered) return;
                     setBait(recovered);
@@ -788,8 +785,8 @@ export default function HomePage() {
                   Собрать наживку · +1 червяк
                 </button>
               )}
-              <button type="button" className="btn secondary" onClick={() => void watchRewardAd()}>
-                +{REWARD_BAIT} наживки за рекламу
+              <button type="button" className="btn secondary" disabled={rewardBait <= 0 || phase !== "idle" || !!catchPopup} onClick={() => void watchRewardAd()}>
+                {rewardBait > 0 ? `Червяки за рекламу: +${rewardBait}` : "Запас червяков полон"}
               </button>
             </div>
 
@@ -809,13 +806,13 @@ export default function HomePage() {
                           {fish.weight} кг · {RARITY_LABEL[fish.rarity]} · {price}🪙
                         </p>
                       </div>
-                      <button type="button" className="btn secondary" onClick={() => sellOne(fish.uid)}>
+                      <button type="button" className="btn secondary" disabled={phase !== "idle" || !!catchPopup} onClick={() => sellOne(fish.uid)}>
                         Продать
                       </button>
                     </div>
                   );
                 })}
-                <button type="button" className="btn" onClick={sellAll}>
+                <button type="button" className="btn" disabled={phase !== "idle" || !!catchPopup} onClick={sellAll}>
                   Продать всё
                 </button>
               </div>
@@ -993,7 +990,7 @@ export default function HomePage() {
       </nav>
 
       {catchPopup && (
-        <div className="overlay catch-overlay" onClick={() => setCatchPopup(null)}>
+        <div className="overlay catch-overlay" onClick={() => { if (!getAdPolicy().isBusy()) setCatchPopup(null); }}>
           <div className="overlay-card" onClick={(event) => event.stopPropagation()}>
             <div className="catch-icon">{getFish(catchPopup.fishId).icon}</div>
             <h3>Улов!</h3>
@@ -1005,7 +1002,7 @@ export default function HomePage() {
               <br />
               Можно продать за {sellFishValue(catchPopup)}🪙
             </p>
-            <button type="button" className="btn" onClick={() => setCatchPopup(null)}>
+            <button type="button" className="btn" onClick={() => { if (!getAdPolicy().isBusy()) setCatchPopup(null); }}>
               В садок
             </button>
           </div>
@@ -1013,16 +1010,17 @@ export default function HomePage() {
       )}
 
       {message && (
-        <div className="overlay" onClick={() => setMessage(null)}>
+        <div className="overlay" onClick={() => { if (!getAdPolicy().isBusy()) setMessage(null); }}>
           <div className="overlay-card" onClick={(event) => event.stopPropagation()}>
             <h3>Омут</h3>
             <p>{message}</p>
-            <button type="button" className="btn" onClick={() => setMessage(null)}>
+            <button type="button" className="btn" onClick={() => { if (!getAdPolicy().isBusy()) setMessage(null); }}>
               Понятно
             </button>
           </div>
         </div>
       )}
+      </fieldset>
     </div>
   );
 }

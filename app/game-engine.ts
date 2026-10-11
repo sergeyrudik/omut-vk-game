@@ -516,13 +516,19 @@ export function refreshDaily(daily: DailyProgress, date = getLocalDateKey()): Da
   return createDefaultDaily(date);
 }
 
+export const BAIT_CAP = 9999;
+
+export function rewardBaitAmount(bait: Record<BaitId, number>, requested = 8): number {
+  return Math.min(requested, Math.max(0, BAIT_CAP - Math.floor(bait.worm)));
+}
+
 export function refreshRewards(rewards: RewardLimits, date = getLocalDateKey()): RewardLimits {
   if (rewards.date === date) return rewards;
-  return createDefaultRewards(date);
+  return { ...createDefaultRewards(date), lastRewardAt: rewards.lastRewardAt };
 }
 
 export function grantBaitPack(bait: Record<BaitId, number>, amount = 8): Record<BaitId, number> {
-  return { ...bait, worm: bait.worm + amount };
+  return { ...bait, worm: Math.min(BAIT_CAP, bait.worm + Math.max(0, amount)) };
 }
 
 export function buyBait(
