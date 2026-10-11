@@ -1,3 +1,4 @@
+function adTestLocks(){let held=false;return {request:async(_key,_opts,run)=>{if(held)return run(null);held=true;try{return await run({name:"test-ad"});}finally{held=false;}}};}
 function memoryAdStorage(){const values=new Map();return {getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};}
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -22,7 +23,7 @@ function fixture(options = {}) {
   const { ready = true, delay = 0, onDelay = () => {} } = options;
   const response = "response" in options ? options.response : true;
   let clock = Date.now(); const initial = engine.createDefaultSave(); const state = structuredClone(initial); const events = []; const calls = [];
-  const policy = createAdPolicy({ storageKey: "handler", storage: memoryAdStorage(), locks: null, settle: async () => {}, now: () => clock });
+  const policy = createAdPolicy({ storageKey: "handler", storage: memoryAdStorage(), locks: adTestLocks(), now: () => clock });
   const noop = () => {};
   const write = (key) => (value) => { state[key] = typeof value === "function" ? value(state[key]) : value; };
   const client = ready ? { send: async (method, params) => { calls.push([method, params?.ad_format]); if (delay) { clock += delay; onDelay(delay); } return { result: response }; } } : null;

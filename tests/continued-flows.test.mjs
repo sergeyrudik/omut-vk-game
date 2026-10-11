@@ -1,3 +1,4 @@
+function adTestLocks(){let held=false;return {request:async(_key,_opts,run)=>{if(held)return run(null);held=true;try{return await run({name:"test-ad"});}finally{held=false;}}};}
 function memoryAdStorage(){const values=new Map();return {getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};}
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -26,14 +27,14 @@ function invoke(name, scope, ...args) {
  return name === "quests" ? fn : fn(...args);
 }
 function store(initial = engine.createDefaultSave()) {
- let raw = engine.serializeSave(initial); let tail = Promise.resolve(); const adStorage=memoryAdStorage();
- return { adStorage, read:()=>raw, write:value=>{raw=value;return true;}, parse:()=>engine.migrateSave(raw),
+ let raw = engine.serializeSave(initial); let tail = Promise.resolve(); const adStorage=memoryAdStorage(); const adLocks=adTestLocks();
+ return { adStorage, adLocks, read:()=>raw, write:value=>{raw=value;return true;}, parse:()=>engine.migrateSave(raw),
   withLock:run=>{const promise=tail.then(run);tail=promise.catch(()=>{});return promise;}, flush:async()=>{for(let i=0;i<4;i++){await tail;await Promise.resolve();}} };
 }
 function fixture(shared = store(), options={}) {
  const initial=shared.parse(); const state=structuredClone(initial); const saveRef={current:state}; const events=[]; const sdk=[]; const timers=new Map();let uid=1;const noop=()=>{};
  const coord=createSaveCoordinator({read:shared.read,write:shared.write,parse:value=>engine.migrateSave(value)??engine.createDefaultSave(),serialize:engine.serializeSave,withLock:shared.withLock});coord.initialize(shared.read(),initial);
- const policy=createAdPolicy({storageKey:"continued",storage:shared.adStorage,locks:null,settle:async()=>{}});
+ const policy=createAdPolicy({storageKey:"continued",storage:shared.adStorage,locks:("locks" in options ? options.locks : shared.adLocks)});
  const scope={...engine,...state,saveRef,paused:false,phase:"idle",started:true,hydrated:true,catchPopup:null,craftPopup:null,interstitialBusy:false,rewardBusy:false,
   resetPendingRef:{current:false},castPendingRef:{current:false},fishingGenerationRef:{current:0},incomePauseRef:{current:false},
   getAdPolicy:()=>policy,requestEconomyReward,attemptEconomyInterstitial,
@@ -188,4 +189,11 @@ test("omut: all four paid bait kinds use coins earned by cast/catch/sale and per
   while(f.reload().coins<engine.BAIT_DATA[id].cost*5){if(!f.reload().bait.worm)await f.run("purchaseBait","worm");f.state.phase="casting";f.state.castPos=0.5;await f.run("lockCast");await f.run("finishCatch",f.scope.pendingCatchRef.current);f.state.catchPopup=null;await f.run("sellAll");}
   const before=f.reload();await f.run("purchaseBait",id);assert.equal(f.reload().bait[id],before.bait[id]+5);assert.equal(before.coins-f.reload().coins,engine.BAIT_DATA[id].cost*5);
  }
+});
+
+test(`${game}: unsupported Web Locks never reach native SDK and actual free gameplay still persists`,async t=>{
+ t.mock.timers.enable({apis:["Date"],now:1800000000000});const f=fixture(store(),{locks:null});
+ await f.run(game==="lavka"?"watchReward":"watchRewardAd",game==="gorn"?"ingots":"coins");assert.equal(f.sdk.length,0);assert.equal(f.policy.isBusy(),false);assert.ok(f.events.includes("Реклама пока недоступна"));assert.equal(f.events.includes("Подождите немного"),false);
+ if(game==="omut"){f.state.phase="casting";f.state.castPos=0;await f.run("lockCast");assert.equal(f.reload().stats.casts,1);assert.equal(f.reload().bait.worm,19);}else{await f.run(sale);assert.ok(resource(f.reload())>0);}
+ assert.equal(f.reload().rewards.count,0);
 });

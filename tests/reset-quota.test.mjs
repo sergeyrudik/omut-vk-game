@@ -1,3 +1,4 @@
+function adTestLocks(){let held=false;return {request:async(_key,_opts,run)=>{if(held)return run(null);held=true;try{return await run({name:"test-ad"});}finally{held=false;}}};}
 function memoryAdStorage(){const values=new Map();return {getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};}
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -29,7 +30,7 @@ function actual(name, scope) {
 function fixture(rewards) {
   const state = engine.createDefaultSave(); state.rewards = { ...rewards }; state.started = true;
   if (game === "lavka") state.coins = 700; if (game === "gorn") state.ingots = 700; if (game === "omut") state.coins = 700;
-  const calls = []; const noop = () => {}; const policy = createAdPolicy({ storageKey: "quota", storage: memoryAdStorage(), locks: null, settle: async () => {} });
+  const calls = []; const noop = () => {}; const policy = createAdPolicy({ storageKey: "quota", storage: memoryAdStorage(), locks: adTestLocks() });
   policy.seedLastAdAt(state.rewards.lastRewardAt);
   const saveRef = { current: state };
   const scope = { ...engine, ...state, saveRef, paused: false, phase: "idle", catchPopup: null,

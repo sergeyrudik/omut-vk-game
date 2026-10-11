@@ -1,3 +1,4 @@
+function adTestLocks(){let held=false;return {request:async(_key,_opts,run)=>{if(held)return run(null);held=true;try{return await run({name:"test-ad"});}finally{held=false;}}};}
 function memoryAdStorage(){const values=new Map();return {getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};}
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -7,7 +8,7 @@ import { attemptEconomyInterstitial, requestEconomyReward } from "../app/economy
 function setup() {
   let time = 1_000_000;
   const busy = [];
-  const policy = createAdPolicy({ storageKey: "test", storage: memoryAdStorage(), locks: null, settle: async () => {}, now: () => time });
+  const policy = createAdPolicy({ storageKey: "test", storage: memoryAdStorage(), locks: adTestLocks(), now: () => time });
   return { policy, busy, now: () => time, advance: (ms) => { time += ms; } };
 }
 function rewardOptions(clock, overrides = {}) {
