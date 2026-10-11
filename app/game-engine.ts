@@ -561,3 +561,9 @@ export function gatherEmergencyBait(
   }
   return { ...bait, worm: 1 };
 }
+
+export const COIN_CAP = 999_999;
+export function grantCoins(save: GameSave, requested: number): GameSave {
+  const amount = Math.min(Math.max(0, Math.floor(requested)), Math.max(0, COIN_CAP - save.coins));
+  return { ...save, coins: save.coins + amount, stats: { ...save.stats, coinsEarned: Math.min(1_000_000, save.stats.coinsEarned + amount) } };
+}

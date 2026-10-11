@@ -28,35 +28,38 @@ function fixture() {
   const tasks = new Map(); let nextId = 1; const cancelled = [];
   const noop = () => {};
   const scope = { ...engine, ...save, phase: "casting", paused: false, selectedBait: "worm", location: "backwater", castPos: 0.5, tutorialDone: true, tutorialStep: 2,
-    getAdPolicy: () => ({ isBusy: () => false }), castRaf: { current: 101 }, fightRaf: { current: 102 },
+    getAdPolicy: () => ({ isBusy: () => false, startGameplay: noop }), castRaf: { current: 101 }, fightRaf: { current: 102 },
     biteTimeout: { current: null }, pendingCatchRef: { current: null }, holdingRef: { current: true }, fightRef: { current: engine.createFightState(save.upgrades) },
     castDir: { current: -1 }, playSound: noop, playSoundRef: { current: noop },
     window: { setTimeout: (fn) => { const id = nextId++; tasks.set(id, fn); return id; }, clearTimeout: (id) => tasks.delete(id), cancelAnimationFrame: (id) => cancelled.push(id) },
     applySave: (next) => Object.assign(state, next),
   };
   for (const key of ["Phase", "Tab", "Started", "Holding", "CatchPopup", "Message", "LastResult", "Splash", "CastPos", "Fight", "Bait", "Stats", "Daily", "NextFishUid", "TutorialStep"]) scope[`set${key}`] = (value) => { const k = key[0].toLowerCase() + key.slice(1); state[k] = typeof value === "function" ? value(state[k]) : value; };
+  scope.saveRef = { current: state }; scope.resetPendingRef = { current: false }; scope.castPendingRef = { current: false }; scope.fishingGenerationRef = { current: 0 };
+  scope.commitSave = async transform => { const previous = structuredClone(state); const next = transform(previous); if (next) scope.applySave(next); return { previous, external: next ?? previous, value: next ? "stored" : null }; };
+  scope.synchronizeSave = () => state;
   // Future reset helper is evaluated only if production declares it; no copied implementation.
   if (source.text.includes("const cancelFishing =")) scope.cancelFishing = actual("cancelFishing", scope);
   if (source.text.includes("const resetProgress =")) scope.resetProgress = actual("resetProgress", scope);
   return { scope, state, tasks, cancelled, runRemaining: () => { for (const [id, fn] of [...tasks]) { tasks.delete(id); fn(); } }, lock: () => actual("lockCast", scope)(), reset: () => source.text.includes("const resetProgress =") ? actual("resetProgress", scope)() : actual("reset-button", scope)() };
 }
-test("reset during a pending bite cancels the actual callback and cannot resurrect old fishing", () => {
-  const f = fixture(); f.lock(); assert.equal(f.state.phase, "waiting"); assert.equal(f.tasks.size, 1); assert.ok(f.scope.pendingCatchRef.current);
-  f.reset(); assert.equal(f.state.phase, "idle"); assert.equal(f.state.started, false);
+test("reset during a pending bite cancels the actual callback and cannot resurrect old fishing", async () => {
+  const f = fixture(); await f.lock(); assert.equal(f.state.phase, "waiting"); assert.equal(f.tasks.size, 1); assert.ok(f.scope.pendingCatchRef.current);
+  await f.reset(); assert.equal(f.state.phase, "idle"); assert.equal(f.state.started, false);
   f.runRemaining(); assert.equal(f.state.phase, "idle", "pending pre-reset bite must never change reset state to fighting");
   assert.equal(f.tasks.size, 0); assert.equal(f.scope.pendingCatchRef.current, null); assert.equal(f.scope.holdingRef.current, false);
   assert.equal(f.state.catchPopup, null); assert.equal(f.state.message, "Прогресс сброшен");
 });
-test("reset cancels casting/fight frames and clears transient result UI while restoring starter resources", () => {
-  const f = fixture(); f.state.coins = 999; f.reset();
+test("reset cancels casting/fight frames and clears transient result UI while restoring starter resources", async () => {
+  const f = fixture(); f.state.coins = 999; await f.reset();
   assert.ok(f.cancelled.includes(101)); assert.ok(f.cancelled.includes(102));
   assert.equal(f.state.coins, 80); assert.equal(f.state.pearls, 2); assert.equal(f.state.bait.worm, 20);
   assert.equal(f.state.catchPopup, null); assert.equal(f.state.lastResult, null); assert.equal(f.state.holding, false); assert.equal(f.state.phase, "idle");
 });
 
-test("locking a cast with empty selected bait declines before fish selection, timers, or resource counters", () => {
+test("locking a cast with empty selected bait declines before fish selection, timers, or resource counters", async () => {
   const f = fixture(); const before = structuredClone(f.state.bait);
-  f.scope.selectedBait = "fly"; f.scope.castPos = 0.5; f.lock();
+  f.state.selectedBait = "fly"; f.scope.castPos = 0.5; await f.lock();
   assert.equal(f.state.phase, "idle"); assert.equal(f.state.stats.casts, 0);
   assert.deepEqual(f.state.bait, before); assert.equal(f.tasks.size, 0);
   assert.equal(f.scope.pendingCatchRef.current, null);

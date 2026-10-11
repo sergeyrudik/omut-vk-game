@@ -1,3 +1,4 @@
+function memoryAdStorage(){const values=new Map();return {getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};}
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
@@ -21,7 +22,7 @@ function fixture(options = {}) {
   const { ready = true, delay = 0, onDelay = () => {} } = options;
   const response = "response" in options ? options.response : true;
   let clock = Date.now(); const initial = engine.createDefaultSave(); const state = structuredClone(initial); const events = []; const calls = [];
-  const policy = createAdPolicy({ storageKey: "handler", storage: null, now: () => clock });
+  const policy = createAdPolicy({ storageKey: "handler", storage: memoryAdStorage(), locks: null, settle: async () => {}, now: () => clock });
   const noop = () => {};
   const write = (key) => (value) => { state[key] = typeof value === "function" ? value(state[key]) : value; };
   const client = ready ? { send: async (method, params) => { calls.push([method, params?.ad_format]); if (delay) { clock += delay; onDelay(delay); } return { result: response }; } } : null;
@@ -37,6 +38,14 @@ function fixture(options = {}) {
     window: { setTimeout: noop }, Date: { now: () => clock },
   };
   for (const key of ["Ingots","Coal","Upgrades","Crafted","Stats","Daily","Rewards","Boost","NowTick","Now","Message","CraftPopup","TapStreak","Heat","FloatText","FloatCrit","Hit","CritHit","Sparking","TutorialStep","TutorialDone","AdBusy","RewardBusy","Keepnet","Coins","Bait","TapPulse"]) scope[`set${key}`] = write(key[0].toLowerCase() + key.slice(1));
+  scope.resetPendingRef = { current: false };
+  scope.commitSave = async transform => {
+    const previous = structuredClone(state);
+    const next = transform(previous);
+    if (next) scope.setSave(next);
+    return { previous, external: next ?? previous, value: next ? "stored" : null };
+  };
+  scope.synchronizeSave = () => state;
   scope.maybeShowInterstitial = (...args) => { events.push(["auto", ...args]); return actual("maybeShowInterstitial", scope)(...args); };
   return { state, scope, policy, events, calls, advance: (ms) => { clock += ms; },
     reward: (kind = game === "gorn" ? "ingots" : "coins") => actual(game === "lavka" ? "watchReward" : "watchRewardAd", scope)(kind),
@@ -82,14 +91,14 @@ if (game !== "omut") test(`${game}: real boost starts after video and keeps its 
 });
 if (game === "gorn") {
   test("gorn: crafting displays result without auto; closing it is the sole eligible boundary", async () => {
-    const f = fixture(); f.scope.ingots = 100; f.scope.stats = { ...f.state.stats, taps: 100 };
-    f.handler("craft", "knife"); assert.equal(f.calls.length, 0); assert.equal(f.events.filter(e => Array.isArray(e)).length, 0);
+    const f = fixture(); f.state.ingots = 100; f.state.stats = { ...f.state.stats, taps: 100 };
+    await f.handler("craft", "knife"); assert.equal(f.calls.length, 0); assert.equal(f.events.filter(e => Array.isArray(e)).length, 0);
     assert.ok(f.state.craftPopup); f.scope.craftPopup = f.state.craftPopup;
-    f.advance(180_000); f.handler("closeCraftPopup"); await Promise.resolve(); await Promise.resolve();
+    f.advance(180_000); f.handler("closeCraftPopup"); await new Promise(setImmediate);
     assert.equal(f.state.craftPopup, null); assert.equal(f.calls.filter(c => c[1] === "interstitial").length, 2);
   });
-  test("gorn: pending ad prevents tapping, crafting, upgrades, and duplicate result closure", () => {
-    const f = fixture(); f.policy.beginReward(); const before = structuredClone(f.state);
+  test("gorn: pending ad prevents tapping, crafting, upgrades, and duplicate result closure", async () => {
+    const f = fixture(); await f.policy.beginReward(); const before = structuredClone(f.state);
     f.handler("onTap"); f.handler("craft", "knife"); f.handler("buyUpgrade", "hammer"); f.scope.craftPopup = "knife"; f.handler("closeCraftPopup");
     assert.deepEqual(f.state, before); assert.equal(f.calls.length, 0);
   });
@@ -106,8 +115,8 @@ if (game === "lavka") {
     f.state.coins = 100; f.scope.saveRef.current = structuredClone(f.state); f.handler("onUpgrade", "counter"); assert.equal(f.state.upgrades.counter, 1);
     assert.deepEqual(f.events.filter(e => Array.isArray(e)), [["auto", "upgrade-bought"]]);
   });
-  test("lavka: pending ad prevents both selling and upgrades", () => {
-    const f = fixture(); f.policy.beginReward(); const before = structuredClone(f.state);
+  test("lavka: pending ad prevents both selling and upgrades", async () => {
+    const f = fixture(); await f.policy.beginReward(); const before = structuredClone(f.state);
     f.handler("onSell"); f.handler("onUpgrade", "counter"); assert.deepEqual(f.state, before); assert.equal(f.calls.length, 0);
   });
 }
@@ -118,7 +127,7 @@ if (game === "omut") {
         const f = fixture(); f.scope.phase = phase;
         const fish = engine.rollCatch("backwater", f.state.upgrades, "worm", "perfect", 1, () => 0.3);
         f.scope.keepnet = f.state.keepnet = [fish]; const coins = f.state.coins;
-        f.policy.startGameplay(); f.advance(180_000); f.handler(name, fish.uid); await Promise.resolve(); await Promise.resolve();
+        f.policy.startGameplay(); f.advance(180_000); await f.handler(name, fish.uid); await new Promise(setImmediate);
         assert.equal(f.state.keepnet.length, phase === "idle" ? 0 : 1);
         assert.equal(f.state.coins > coins, phase === "idle");
         assert.equal(f.calls.filter(c => c[1] === "interstitial").length, phase === "idle" ? 2 : 0);

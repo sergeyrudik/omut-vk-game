@@ -34,20 +34,20 @@ export async function requestEconomyReward(options: {
   rewardValue: number;
   now?: () => number;
   onBusyChange: (busy: boolean) => void;
-  onGranted: (watchedAt: number, rewardValue: number) => void;
+  onGranted: (watchedAt: number, rewardValue: number) => void | Promise<void>;
 }): Promise<RewardResult> {
   const now = options.now ?? Date.now;
   if (!Number.isFinite(options.rewardValue) || options.rewardValue <= 0) return "no-value";
   if (!options.available) return "unavailable";
   if (options.count >= options.dailyLimit) return "daily-limit";
-  if (now() - options.lastRewardAt < options.cooldownMs || !options.policy.beginReward()) return "wait";
+  if (now() - options.lastRewardAt < options.cooldownMs || !(await options.policy.beginReward())) return "wait";
   options.onBusyChange(true);
   try {
     const response = await options.send("VKWebAppShowNativeAds", { ad_format: "reward" });
     if (typeof response !== "object" || response === null || !("result" in response) || response.result !== true) return "unavailable";
     const watchedAt = now();
     options.policy.finishReward(true);
-    options.onGranted(watchedAt, options.rewardValue);
+    await options.onGranted(watchedAt, options.rewardValue);
     return "granted";
   } catch {
     return "unavailable";

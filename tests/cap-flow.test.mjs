@@ -25,18 +25,20 @@ function fixture(key, level) {
     setMessage: value => messages.push(value), playSound: noop, trackEvent: noop,
   };
   for (const k of ["coal", "pearls", "ingots", "upgrades", "daily"]) scope[`set${k[0].toUpperCase()}${k.slice(1)}`] = value => { state[k] = typeof value === "function" ? value(state[k]) : value; };
+  scope.resetPendingRef = { current: false };
+  scope.commitSave = async transform => { const previous = structuredClone(state); const next = transform(previous); if (next) Object.assign(state, next); return { previous, external: next ?? previous, value: next ? "stored" : null }; };
   return { state, messages, run: () => actual(scope)(key) };
 }
-test(`${game}: every actual upgrade handler accepts the final persisted level then refuses further charging`, () => {
+test(`${game}: every actual upgrade handler accepts the final persisted level then refuses further charging`, async () => {
   for (const key of Object.keys(engine.UPGRADE_DATA)) {
     const f = fixture(key, engine.MAX_UPGRADE_LEVEL - 1); const before = structuredClone(f.state);
-    f.run(); assert.equal(f.state.upgrades[key], engine.MAX_UPGRADE_LEVEL);
+    await f.run(); assert.equal(f.state.upgrades[key], engine.MAX_UPGRADE_LEVEL);
     const resource = game === "gorn" ? "coal" : "pearls";
     assert.equal(before[resource] - f.state[resource], engine.getUpgradeCost(engine.MAX_UPGRADE_LEVEL - 1));
     if (game === "gorn") assert.equal(before.ingots - f.state.ingots, engine.getUpgradeIngotCost(key, engine.MAX_UPGRADE_LEVEL - 1));
     assert.equal(engine.migrateSave(engine.serializeSave(f.state)).upgrades[key], engine.MAX_UPGRADE_LEVEL);
     const full = fixture(key, engine.MAX_UPGRADE_LEVEL); const unchanged = structuredClone(full.state);
-    full.run(); assert.deepEqual(full.state, unchanged); assert.deepEqual(full.messages, ["Максимальный уровень улучшения"]);
+    await full.run(); assert.deepEqual(full.state, unchanged); assert.deepEqual(full.messages, ["Максимальный уровень улучшения"]);
   }
 });
 if (game === "omut") {

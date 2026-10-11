@@ -4,11 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import bridge from "@vkontakte/vk-bridge";
 import { createVkBridge, readStoredValue, writeStoredValue } from "./vk-runtime";
 import Link from "next/link";
+import { createSaveCoordinator } from "./save-coordinator";
 import { createAdPolicy } from "./ad-policy";
 import { attemptEconomyInterstitial, requestEconomyReward } from "./economy-ads";
 import {
   BAIT_DATA,
   BAIT_CAP,
+  COIN_CAP,
   FISH_CATALOG,
   LOCATION_DATA,
   RARITY_LABEL,
@@ -26,6 +28,7 @@ import {
   getUnlockedLocations,
   getUpgradeCost,
   grantBaitPack,
+  grantCoins,
   rewardBaitAmount,
   migrateSave,
   refreshDaily,
@@ -129,8 +132,8 @@ export default function HomePage() {
   const [tutorialStep, setTutorialStep] = useState(0);
   const [stats, setStats] = useState<GameStats>(createDefaultSave().stats);
   const [daily, setDaily] = useState<DailyProgress>(createDefaultSave().daily);
-  const [rewards, setRewards] = useState<RewardLimits>(createDefaultSave().rewards);
-  const [nextFishUid, setNextFishUid] = useState(1);
+  const [, setRewards] = useState<RewardLimits>(createDefaultSave().rewards);
+  const [, setNextFishUid] = useState(1);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [castPos, setCastPos] = useState(0);
@@ -148,6 +151,11 @@ export default function HomePage() {
     return adPolicyRef.current;
   }, []);
   useEffect(() => { if (hydrated && started) getAdPolicy().startGameplay(); }, [hydrated, started, getAdPolicy]);
+  const saveRef = useRef<GameSave>(createDefaultSave());
+  const saveCoordinatorRef = useRef<ReturnType<typeof createSaveCoordinator> | null>(null);
+  const resetPendingRef = useRef(false);
+  const castPendingRef = useRef(false);
+  const fishingGenerationRef = useRef(0);
   const castDir = useRef(1);
   const castRaf = useRef<number | null>(null);
   const fightRaf = useRef<number | null>(null);
@@ -203,6 +211,7 @@ export default function HomePage() {
   }, []);
 
   const applySave = useCallback((save: GameSave) => {
+    saveRef.current = save;
     setCoins(save.coins);
     setPearls(save.pearls);
     setBait(save.bait);
@@ -221,6 +230,65 @@ export default function HomePage() {
     setNextFishUid(save.nextFishUid);
   }, [getAdPolicy]);
 
+  const cancelFishing = useCallback(() => {
+    fishingGenerationRef.current += 1;
+    if (biteTimeout.current !== null) window.clearTimeout(biteTimeout.current);
+    if (castRaf.current !== null) window.cancelAnimationFrame(castRaf.current);
+    if (fightRaf.current !== null) window.cancelAnimationFrame(fightRaf.current);
+    biteTimeout.current = null;
+    castRaf.current = null;
+    fightRaf.current = null;
+    pendingCatchRef.current = null;
+    holdingRef.current = false;
+    castDir.current = 1;
+    const freshFight = createFightState({ rod: 0, line: 0, keepnet: 0 });
+    fightRef.current = freshFight;
+    setFight(freshFight);
+    setHolding(false);
+    setCastPos(0);
+    setPhase("idle");
+    setCatchPopup(null);
+    setLastResult(null);
+    setSplash(false);
+  }, []);
+
+  const getSaveCoordinator = useCallback(() => {
+    if (!saveCoordinatorRef.current) saveCoordinatorRef.current = createSaveCoordinator({
+      read: () => readStoredValue(SAVE_KEY), write: (value) => writeStoredValue(SAVE_KEY, value),
+      parse: (value) => migrateSave(value) ?? createDefaultSave(), serialize: serializeSave,
+      withLock: async (run) => navigator.locks ? await navigator.locks.request(`${SAVE_KEY}:write`, run) : await run(),
+    });
+    return saveCoordinatorRef.current;
+  }, []);
+
+  const synchronizeSave = useCallback(() => {
+    const external = getSaveCoordinator().refresh();
+    if (external) {
+      if (external.stats.casts < saveRef.current.stats.casts || external.nextFishUid < saveRef.current.nextFishUid) cancelFishing();
+      applySave(external);
+    }
+    return external ?? saveRef.current;
+  }, [applySave, getSaveCoordinator, cancelFishing]);
+
+  const commitSave = useCallback(async (transform: (current: GameSave) => GameSave | null) => {
+    const result = await getSaveCoordinator().transact((current) => {
+      if (current.stats.casts < saveRef.current.stats.casts || current.nextFishUid < saveRef.current.nextFishUid) cancelFishing();
+      return transform(current);
+    });
+    if (result.external) applySave(result.external);
+    if (result.value && (result.localWritten === false || readStoredValue(SAVE_KEY) === result.value)) {
+      void bridgeRef.current?.send("VKWebAppStorageSet", { key: VK_SAVE_KEY, value: result.value }).catch(() => undefined);
+    }
+    return result;
+  }, [applySave, getSaveCoordinator, cancelFishing]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const listener = (event: StorageEvent) => { if (event.key === SAVE_KEY || event.key === null) synchronizeSave(); };
+    window.addEventListener("storage", listener);
+    return () => window.removeEventListener("storage", listener);
+  }, [hydrated, synchronizeSave]);
+
   const checkRewardAvailability = useCallback(async () => {
     if (!bridgeRef.current) return;
     try {
@@ -236,7 +304,6 @@ export default function HomePage() {
   useEffect(() => {
     let cancelled = false;
     const hydrate = async () => {
-      const localSave = migrateSave(readStoredValue(SAVE_KEY));
       let cloudSave: GameSave | null = null;
       try {
         await promiseWithTimeout(bridge.send("VKWebAppInit"), 1800);
@@ -272,7 +339,9 @@ export default function HomePage() {
         setVkReady(false);
       }
       if (cancelled) return;
-      applySave(selectNewestSave(localSave, cloudSave) ?? createDefaultSave());
+      const raw = readStoredValue(SAVE_KEY);
+      getSaveCoordinator().initialize(raw, selectNewestSave(migrateSave(raw), cloudSave) ?? createDefaultSave());
+      await commitSave((current) => current);
       setHydrated(true);
       trackEvent("app_open");
       void checkRewardAvailability();
@@ -281,62 +350,7 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [applySave, checkRewardAvailability, trackEvent]);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    const timeout = window.setTimeout(() => {
-      const save: GameSave = {
-        version: 1,
-        updatedAt: Date.now(),
-        coins,
-        pearls,
-        bait,
-        selectedBait,
-        location,
-        upgrades,
-        keepnet,
-        album,
-        sound,
-        tutorialDone,
-        tutorialStep,
-        stats,
-        daily,
-        rewards,
-        nextFishUid,
-      };
-      const value = serializeSave(save);
-      try {
-        writeStoredValue(SAVE_KEY, value);
-      } catch {
-        trackEvent("save_write_error", { source: "local" });
-      }
-      if (bridgeRef.current) {
-        void bridgeRef.current
-          .send("VKWebAppStorageSet", { key: VK_SAVE_KEY, value })
-          .catch(() => trackEvent("save_write_error", { source: "vk" }));
-      }
-    }, 250);
-    return () => window.clearTimeout(timeout);
-  }, [
-    hydrated,
-    coins,
-    pearls,
-    bait,
-    selectedBait,
-    location,
-    upgrades,
-    keepnet,
-    album,
-    sound,
-    tutorialDone,
-    tutorialStep,
-    stats,
-    daily,
-    rewards,
-    nextFishUid,
-    trackEvent,
-  ]);
+  }, [commitSave, getSaveCoordinator, checkRewardAvailability, trackEvent]);
 
   useEffect(() => {
     const handler = (event: VKEvent) => {
@@ -377,52 +391,32 @@ export default function HomePage() {
     };
   }, [phase, paused]);
 
-  const finishEscape = useCallback(() => {
-    setStats((prev) => ({ ...prev, escapes: prev.escapes + 1 }));
-    setLastResult("Рыба сорвалась");
-    pendingCatchRef.current = null;
-    setPhase("idle");
-    playSound("error");
-  }, [playSound]);
+  const finishEscape = useCallback(async () => {
+    const generation = fishingGenerationRef.current;
+    const pending = pendingCatchRef.current;
+    await commitSave((current) => generation !== fishingGenerationRef.current || (pending && current.nextFishUid <= pending.uid) ? null : ({ ...current, stats: { ...current.stats, escapes: current.stats.escapes + 1 } }));
+    if (generation !== fishingGenerationRef.current) return;
+    setLastResult("Рыба сорвалась"); pendingCatchRef.current = null; setPhase("idle"); playSound("error");
+  }, [commitSave, playSound]);
 
-  const finishCatch = useCallback(
-    (fish: CaughtFish) => {
-      setKeepnet((prev) => {
-        if (prev.length >= getKeepnetCapacity(upgrades)) {
-          setMessage("Садок полон — продай часть улова");
-          return prev;
-        }
-        return [...prev, fish];
-      });
-      setAlbum((prev) => ({ ...prev, [fish.fishId]: (prev[fish.fishId] ?? 0) + 1 }));
-      setStats((prev) => ({
-        ...prev,
-        catches: prev.catches + 1,
-        bestRarity: betterRarity(prev.bestRarity, fish.rarity),
-        locationsUnlocked: getUnlockedLocations(prev.catches + 1).length,
-      }));
-      setDaily((prev) => {
-        const fresh = refreshDaily(prev);
-        return { ...fresh, catch: fresh.catch + 1 };
-      });
-      setLastResult(`${getFish(fish.fishId).icon} ${getFish(fish.fishId).name} · ${fish.weight} кг`);
-      setCatchPopup(fish);
-      setSplash(true);
-      window.setTimeout(() => setSplash(false), 450);
-      pendingCatchRef.current = null;
-      setPhase("idle");
-      if (!tutorialDone) {
-        setTutorialStep((step) => Math.min(2, step + 1));
-        if (tutorialStep >= 1) setTutorialDone(true);
-      }
-      playSound("catch");
-      void bridgeRef.current
-        ?.send("VKWebAppTapticNotificationOccurred", { type: "success" })
-        .catch(() => undefined);
-      trackEvent("fish_caught", { id: fish.fishId, rarity: fish.rarity });
-    },
-    [playSound, trackEvent, tutorialDone, tutorialStep, upgrades],
-  );
+  const finishCatch = useCallback(async (fish: CaughtFish) => {
+    const generation = fishingGenerationRef.current;
+    const result = await commitSave((current) => {
+      if (generation !== fishingGenerationRef.current || current.nextFishUid <= fish.uid) return null;
+      if (current.keepnet.some((item) => item.uid === fish.uid) || current.keepnet.length >= getKeepnetCapacity(current.upgrades)) return null;
+      const daily = refreshDaily(current.daily);
+      return { ...current, keepnet: [...current.keepnet, fish], album: { ...current.album, [fish.fishId]: Math.min(9999, (current.album[fish.fishId] ?? 0) + 1) },
+        stats: { ...current.stats, catches: current.stats.catches + 1, bestRarity: betterRarity(current.stats.bestRarity, fish.rarity), locationsUnlocked: getUnlockedLocations(current.stats.catches + 1).length },
+        daily: { ...daily, catch: daily.catch + 1 }, tutorialStep: Math.min(2, current.tutorialStep + 1), tutorialDone: current.tutorialDone || current.tutorialStep >= 1 };
+    });
+    if (generation !== fishingGenerationRef.current) return;
+    pendingCatchRef.current = null; setPhase("idle");
+    if (!result.value) { setMessage("Садок полон или заброс отменён — продай улов и повтори"); return; }
+    setLastResult(`${getFish(fish.fishId).icon} ${getFish(fish.fishId).name} · ${fish.weight} кг`); setCatchPopup(fish); setSplash(true);
+    window.setTimeout(() => setSplash(false), 450); playSound("catch");
+    void bridgeRef.current?.send("VKWebAppTapticNotificationOccurred", { type: "success" }).catch(() => undefined);
+    trackEvent("fish_caught", { id: fish.fishId, rarity: fish.rarity });
+  }, [commitSave, playSound, trackEvent]);
 
   useEffect(() => {
     if (phase !== "fighting" || paused) return;
@@ -459,62 +453,47 @@ export default function HomePage() {
   }, [getAdPolicy, started, catchPopup, vkReady, paused, phase]);
 
   const startCast = () => {
-    if (phase !== "idle" || paused || getAdPolicy().isBusy()) return;
+    if (phase !== "idle" || paused || getAdPolicy().isBusy() || resetPendingRef.current || castPendingRef.current) return;
     getAdPolicy().startGameplay();
-    if ((bait[selectedBait] ?? 0) <= 0) {
-      setMessage("Нет наживки — купи на снастях или посмотри рекламу");
-      return;
-    }
-    if (keepnet.length >= capacity) {
-      setMessage("Садок полон");
-      return;
-    }
-    setCastPos(0);
-    castDir.current = 1;
-    setPhase("casting");
-    setLastResult(null);
-    playSound("tap");
+    const current = synchronizeSave();
+    if ((current.bait[current.selectedBait] ?? 0) <= 0) { setMessage("Нет наживки — купи на снастях или собери червяка, если запас исчерпан"); return; }
+    if (current.keepnet.length >= getKeepnetCapacity(current.upgrades)) { setMessage("Садок полон"); return; }
+    setCastPos(0); castDir.current = 1; setPhase("casting"); setLastResult(null); playSound("tap");
   };
 
-  const lockCast = () => {
-    if (phase !== "casting" || paused || getAdPolicy().isBusy()) return;
+  const lockCast = async () => {
+    if (phase !== "casting" || paused || getAdPolicy().isBusy() || resetPendingRef.current || castPendingRef.current) return;
+    castPendingRef.current = true;
+    const generation = fishingGenerationRef.current;
     if (castRaf.current) window.cancelAnimationFrame(castRaf.current);
-    if ((bait[selectedBait] ?? 0) <= 0) {
-      setPhase("idle");
-      setMessage("Нет выбранной наживки — выбери другую или пополни запас");
-      return;
-    }
     const quality = evaluateCast(castPos);
-    setBait((prev) => ({ ...prev, [selectedBait]: Math.max(0, prev[selectedBait] - 1) }));
-    setStats((prev) => ({ ...prev, casts: prev.casts + 1 }));
-    setDaily((prev) => {
-      const fresh = refreshDaily(prev);
-      return { ...fresh, cast: fresh.cast + 1 };
-    });
-    if (!tutorialDone && tutorialStep === 0) setTutorialStep(1);
-
-    const cast = resolveCast(quality, location, upgrades, selectedBait);
-    playSound("cast");
-    if (quality === "miss") {
-      setLastResult("Мимо — наживка ушла");
-      setPhase("idle");
-      playSound("error");
-      return;
-    }
-
-    const fish = rollCatch(location, upgrades, selectedBait, quality, nextFishUid);
-    setNextFishUid((value) => value + 1);
-    pendingCatchRef.current = fish;
-    setPhase("waiting");
-    setLastResult(quality === "perfect" ? "Идеальный заброс!" : "Заброс удался");
-    biteTimeout.current = window.setTimeout(() => {
-      biteTimeout.current = null;
-      if (!pendingCatchRef.current) return;
-      setFight(createFightState(upgrades));
-      setPhase("fighting");
-      setHolding(false);
-      if (!tutorialDone && tutorialStep === 1) setTutorialStep(2);
-    }, cast.biteDelayMs);
+    let fish: CaughtFish | null = null;
+    let cast: ReturnType<typeof resolveCast> | null = null;
+    let castUpgrades = saveRef.current.upgrades;
+    try {
+      const result = await commitSave((current) => {
+        if (generation !== fishingGenerationRef.current || current.bait[current.selectedBait] <= 0 || current.keepnet.length >= getKeepnetCapacity(current.upgrades)) return null;
+        castUpgrades = current.upgrades;
+        cast = resolveCast(quality, current.location, current.upgrades, current.selectedBait);
+        if (quality !== "miss") fish = rollCatch(current.location, current.upgrades, current.selectedBait, quality, current.nextFishUid);
+        const daily = refreshDaily(current.daily);
+        return { ...current, bait: { ...current.bait, [current.selectedBait]: current.bait[current.selectedBait] - 1 },
+          stats: { ...current.stats, casts: current.stats.casts + 1 }, daily: { ...daily, cast: daily.cast + 1 },
+          tutorialStep: current.tutorialDone ? current.tutorialStep : Math.max(1, current.tutorialStep), nextFishUid: current.nextFishUid + (fish ? 1 : 0) };
+      });
+      if (generation !== fishingGenerationRef.current) return;
+      if (!result.value) { setPhase("idle"); setMessage("Нет наживки или садок полон — проверь снасти и повтори"); return; }
+      playSound("cast");
+      if (!fish || !cast) { setLastResult("Мимо — наживка ушла"); setPhase("idle"); playSound("error"); return; }
+      pendingCatchRef.current = fish; setPhase("waiting"); setLastResult(quality === "perfect" ? "Идеальный заброс!" : "Заброс удался");
+      biteTimeout.current = window.setTimeout(() => {
+        biteTimeout.current = null;
+        if (generation !== fishingGenerationRef.current || !pendingCatchRef.current) return;
+        synchronizeSave();
+        if (generation !== fishingGenerationRef.current || !pendingCatchRef.current) return;
+        setFight(createFightState(castUpgrades)); setPhase("fighting"); setHolding(false);
+      }, (cast as ReturnType<typeof resolveCast>).biteDelayMs);
+    } finally { castPendingRef.current = false; }
   };
 
   useEffect(() => {
@@ -523,112 +502,93 @@ export default function HomePage() {
     };
   }, []);
 
-  const cancelFishing = useCallback(() => {
-    if (biteTimeout.current !== null) window.clearTimeout(biteTimeout.current);
-    if (castRaf.current !== null) window.cancelAnimationFrame(castRaf.current);
-    if (fightRaf.current !== null) window.cancelAnimationFrame(fightRaf.current);
-    biteTimeout.current = null;
-    castRaf.current = null;
-    fightRaf.current = null;
-    pendingCatchRef.current = null;
-    holdingRef.current = false;
-    castDir.current = 1;
-    const freshFight = createFightState({ rod: 0, line: 0, keepnet: 0 });
-    fightRef.current = freshFight;
-    setFight(freshFight);
-    setHolding(false);
-    setCastPos(0);
-    setPhase("idle");
-    setCatchPopup(null);
-    setLastResult(null);
-    setSplash(false);
-  }, []);
-
-  const resetProgress = () => {
-    if (getAdPolicy().isBusy()) return;
-    cancelFishing();
-    const fresh = createDefaultSave();
-    fresh.rewards = refreshRewards(rewards);
-    applySave(fresh);
-    setTab("water");
-    setStarted(false);
-    setMessage("Прогресс сброшен");
+  const resetProgress = async () => {
+    if (getAdPolicy().isBusy() || resetPendingRef.current) return;
+    resetPendingRef.current = true; cancelFishing();
+    try {
+      await commitSave((current) => { const fresh = createDefaultSave(); fresh.rewards = refreshRewards(current.rewards); return fresh; });
+      setTab("water"); setStarted(false); setMessage("Прогресс сброшен");
+    } finally { resetPendingRef.current = false; }
   };
 
-  const buyUpgrade = (key: UpgradeKey) => {
-    if (paused || getAdPolicy().isBusy()) return;
-    if (upgrades[key] >= MAX_UPGRADE_LEVEL) {
-      setMessage("Максимальный уровень улучшения");
-      return;
-    }
-    const cost = getUpgradeCost(upgrades[key]);
-    if (pearls < cost) {
-      setMessage("Не хватает жемчуга");
-      return;
-    }
-    setPearls((value) => value - cost);
-    setUpgrades((prev) => ({ ...prev, [key]: prev[key] + 1 }));
-    trackEvent("upgrade_buy", { key });
+  const buyUpgrade = async (key: UpgradeKey) => {
+    if (paused || getAdPolicy().isBusy() || resetPendingRef.current) return;
+    let reason = "Не хватает жемчуга";
+    const result = await commitSave((current) => {
+      if (current.upgrades[key] >= MAX_UPGRADE_LEVEL) { reason = "Максимальный уровень улучшения"; return null; }
+      const cost = getUpgradeCost(current.upgrades[key]);
+      if (current.pearls < cost) return null;
+      return { ...current, pearls: current.pearls - cost, upgrades: { ...current.upgrades, [key]: current.upgrades[key] + 1 } };
+    });
+    if (!result.value) setMessage(reason); else trackEvent("upgrade_buy", { key });
   };
 
-  const claimQuest = (id: string) => {
-    if (paused || getAdPolicy().isBusy()) return;
-    const quest = DAILY_QUESTS.find((item) => item.id === id);
-    if (!quest) return;
-    const fresh = refreshDaily(daily);
-    if (fresh.claimed.includes(id) || fresh[quest.field] < quest.target) return;
-    setDaily({ ...fresh, claimed: [...fresh.claimed, id] });
-    if (quest.reward.coins) setCoins((value) => value + quest.reward.coins!);
-    if (quest.reward.pearls) setPearls((value) => value + quest.reward.pearls!);
+  const claimQuest = async (id: string) => {
+    if (paused || getAdPolicy().isBusy() || resetPendingRef.current) return;
+    const quest = DAILY_QUESTS.find((item) => item.id === id); if (!quest) return;
+    await commitSave((current) => {
+      const daily = refreshDaily(current.daily);
+      if (daily.claimed.includes(id) || daily[quest.field] < quest.target) return null;
+      return grantCoins({ ...current, daily: { ...daily, claimed: [...daily.claimed, id] }, pearls: Math.min(9999, current.pearls + (quest.reward.pearls ?? 0)) }, quest.reward.coins ?? 0);
+    });
+  };
+
+  const recoverBait = async () => {
+    if (paused || phase !== "idle" || getAdPolicy().isBusy() || resetPendingRef.current) return;
+    const result = await commitSave((current) => { const bait = gatherEmergencyBait(current.bait, current.coins, current.keepnet); return bait ? { ...current, bait, selectedBait: "worm" } : null; });
+    if (result.value) setMessage("Нашёл одного червяка — можно снова рыбачить");
+  };
+
+  const purchaseBait = async (id: BaitId) => {
+    if (paused || getAdPolicy().isBusy() || resetPendingRef.current) return;
+    let reason = "Не хватает монет";
+    const result = await commitSave((current) => { const bought = buyBait(current.bait, current.coins, id, 5);
+      if (!bought.ok) { reason = current.bait[id] + 5 > BAIT_CAP ? "Недостаточно места для 5 наживок" : reason; return null; }
+      return { ...current, bait: bought.bait, coins: bought.coins };
+    });
+    if (!result.value) setMessage(reason);
   };
 
   const watchRewardAd = async () => {
     if (paused || phase !== "idle" || catchPopup || getAdPolicy().isBusy()) return;
     const client = bridgeRef.current;
-    const fresh = refreshRewards(rewards);
+    const current = synchronizeSave();
+    const fresh = refreshRewards(current.rewards);
     const outcome = await requestEconomyReward({
       policy: getAdPolicy(), send: (method, params) => client!.send(method, params),
       available: !!client && vkReady && adAvailable, count: fresh.count, lastRewardAt: fresh.lastRewardAt,
       dailyLimit: REWARD_DAILY_LIMIT, cooldownMs: REWARD_COOLDOWN_MS,
-      rewardValue: rewardBaitAmount(bait, REWARD_BAIT), onBusyChange: setRewardBusy,
-      onGranted: (watchedAt, amount) => {
-        setRewards((prev) => { const current = refreshRewards(prev); return { ...current, count: current.count + 1, lastRewardAt: watchedAt }; });
-        setStats((prev) => ({ ...prev, adsWatched: prev.adsWatched + 1 }));
-        setBait((prev) => grantBaitPack(prev, amount));
-        setMessage(`Червяки за рекламу: +${amount}`);
+      rewardValue: rewardBaitAmount(current.bait, REWARD_BAIT), onBusyChange: setRewardBusy,
+      onGranted: async (watchedAt, amount) => {
+        let actualAmount = amount;
+        await commitSave((saved) => { const quota = refreshRewards(saved.rewards); actualAmount = rewardBaitAmount(saved.bait, amount);
+          return { ...saved, rewards: { ...quota, count: quota.count + 1, lastRewardAt: watchedAt }, stats: { ...saved.stats, adsWatched: saved.stats.adsWatched + 1 }, bait: grantBaitPack(saved.bait, actualAmount) };
+        });
+        setMessage(actualAmount > 0 ? `Червяки за рекламу: +${actualAmount}` : "Запас червяков полон");
       },
     });
     if (outcome !== "granted") setMessage(outcome === "wait" ? "Подождите немного" : outcome === "daily-limit" ? "Дневной лимит наград исчерпан" : outcome === "no-value" ? "Запас червяков полон" : "Реклама пока недоступна");
     void checkRewardAvailability();
   };
 
-  const sellOne = (uid: number) => {
-    if (paused || phase !== "idle" || catchPopup || getAdPolicy().isBusy()) return;
-    const result = sellKeepnetFish(keepnet, uid);
-    if (!result.coins) return;
-    setKeepnet(result.keepnet);
-    setCoins((value) => value + result.coins);
-    setStats((prev) => ({ ...prev, coinsEarned: prev.coinsEarned + result.coins }));
-    setDaily((prev) => {
-      const fresh = refreshDaily(prev);
-      return { ...fresh, sell: fresh.sell + 1 };
+  const sellOne = async (uid: number) => {
+    if (paused || phase !== "idle" || catchPopup || getAdPolicy().isBusy() || resetPendingRef.current) return;
+    const saved = await commitSave((current) => {
+      const result = sellKeepnetFish(current.keepnet, uid); if (current.coins >= COIN_CAP || !result.coins) return null;
+      const daily = refreshDaily(current.daily);
+      return grantCoins({ ...current, keepnet: result.keepnet, daily: { ...daily, sell: daily.sell + 1 } }, result.coins);
     });
-    void maybeShowInterstitial("sale-one");
+    if (saved.value) void maybeShowInterstitial("sale-one");
   };
 
-  const sellAll = () => {
-    if (paused || phase !== "idle" || catchPopup || getAdPolicy().isBusy()) return;
-    const count = keepnet.length;
-    const result = sellAllKeepnet(keepnet);
-    if (!result.coins) return;
-    setKeepnet([]);
-    setCoins((value) => value + result.coins);
-    setStats((prev) => ({ ...prev, coinsEarned: prev.coinsEarned + result.coins }));
-    setDaily((prev) => {
-      const fresh = refreshDaily(prev);
-      return { ...fresh, sell: fresh.sell + count };
+  const sellAll = async () => {
+    if (paused || phase !== "idle" || catchPopup || getAdPolicy().isBusy() || resetPendingRef.current) return;
+    const saved = await commitSave((current) => {
+      const result = sellAllKeepnet(current.keepnet); if (current.coins >= COIN_CAP || !result.coins) return null;
+      const daily = refreshDaily(current.daily);
+      return grantCoins({ ...current, keepnet: [], daily: { ...daily, sell: daily.sell + current.keepnet.length } }, result.coins);
     });
-    void maybeShowInterstitial("sale-all");
+    if (saved.value) void maybeShowInterstitial("sale-all");
   };
 
   if (!hydrated) {
@@ -688,7 +648,7 @@ export default function HomePage() {
           <section className={`panel${splash ? " splash" : ""}`}>
             <div className="topbar" style={{ marginBottom: 8 }}>
               <h2 style={{ margin: 0 }}>Заводь</h2>
-              <button type="button" className="btn secondary" onClick={() => setSound((value) => !value)}>
+              <button type="button" className="btn secondary" onClick={() => void commitSave((current) => ({ ...current, sound: !current.sound }))}>
                 {sound ? "🔊" : "🔇"}
               </button>
             </div>
@@ -701,7 +661,7 @@ export default function HomePage() {
                   type="button"
                   className={`loc-pill${location === loc.id ? " active" : ""}`}
                   disabled={!unlocked.includes(loc.id)}
-                  onClick={() => setLocation(loc.id)}
+                  onClick={() => void commitSave((current) => getUnlockedLocations(current.stats.catches).includes(loc.id) ? ({ ...current, location: loc.id }) : null)}
                 >
                   {loc.title}
                   {!unlocked.includes(loc.id) ? " 🔒" : ""}
@@ -740,7 +700,7 @@ export default function HomePage() {
                   type="button"
                   className={`bait-pill${selectedBait === id ? " active" : ""}`}
                   disabled={phase !== "idle"}
-                  onClick={() => setSelectedBait(id)}
+                  onClick={() => void commitSave((current) => ({ ...current, selectedBait: id }))}
                 >
                   {BAIT_DATA[id].icon} {BAIT_DATA[id].title} · {bait[id]}
                 </button>
@@ -819,14 +779,7 @@ export default function HomePage() {
                 <button
                   type="button"
                   className="btn secondary"
-                  onClick={() => {
-                    if (paused || getAdPolicy().isBusy()) return;
-                    const recovered = gatherEmergencyBait(bait, coins, keepnet);
-                    if (!recovered) return;
-                    setBait(recovered);
-                    setSelectedBait("worm");
-                    setMessage("Нашёл одного червяка — можно снова рыбачить");
-                  }}
+                  onClick={recoverBait}
                 >
                   Собрать наживку · +1 червяк
                 </button>
@@ -840,7 +793,7 @@ export default function HomePage() {
               <div className="list" style={{ marginTop: 12 }}>
                 {keepnet.map((fish) => {
                   const def = getFish(fish.fishId);
-                  const price = sellFishValue(fish);
+                  const price = Math.min(sellFishValue(fish), Math.max(0, COIN_CAP - coins));
                   return (
                     <div key={fish.uid} className="card">
                       <div>
@@ -852,13 +805,13 @@ export default function HomePage() {
                           {fish.weight} кг · {RARITY_LABEL[fish.rarity]} · {price}🪙
                         </p>
                       </div>
-                      <button type="button" className="btn secondary" disabled={phase !== "idle" || !!catchPopup} onClick={() => sellOne(fish.uid)}>
+                      <button type="button" className="btn secondary" disabled={coins >= COIN_CAP || phase !== "idle" || !!catchPopup} onClick={() => sellOne(fish.uid)}>
                         Продать
                       </button>
                     </div>
                   );
                 })}
-                <button type="button" className="btn" disabled={phase !== "idle" || !!catchPopup} onClick={sellAll}>
+                <button type="button" className="btn" disabled={coins >= COIN_CAP || phase !== "idle" || !!catchPopup} onClick={sellAll}>
                   Продать всё
                 </button>
               </div>
@@ -903,15 +856,7 @@ export default function HomePage() {
                     type="button"
                     className="btn secondary"
                     disabled={bait[id] + 5 > BAIT_CAP}
-                    onClick={() => {
-                      const result = buyBait(bait, coins, id, 5);
-                      if (!result.ok) {
-                        setMessage(bait[id] + 5 > BAIT_CAP ? "Недостаточно места для 5 наживок" : "Не хватает монет");
-                        return;
-                      }
-                      setBait(result.bait);
-                      setCoins(result.coins);
-                    }}
+                    onClick={() => void purchaseBait(id)}
                   >
                     {bait[id] + 5 > BAIT_CAP ? "Запас полон" : "Купить"}
                   </button>

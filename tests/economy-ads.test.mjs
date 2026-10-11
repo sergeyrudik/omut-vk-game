@@ -1,3 +1,4 @@
+function memoryAdStorage(){const values=new Map();return {getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};}
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAdPolicy } from "../app/ad-policy.ts";
@@ -6,7 +7,7 @@ import { attemptEconomyInterstitial, requestEconomyReward } from "../app/economy
 function setup() {
   let time = 1_000_000;
   const busy = [];
-  const policy = createAdPolicy({ storageKey: "test", storage: null, now: () => time });
+  const policy = createAdPolicy({ storageKey: "test", storage: memoryAdStorage(), locks: null, settle: async () => {}, now: () => time });
   return { policy, busy, now: () => time, advance: (ms) => { time += ms; } };
 }
 function rewardOptions(clock, overrides = {}) {
@@ -49,7 +50,7 @@ test("parallel reward click cannot request a second video or duplicate the grant
   const clock = setup(); let resolveVideo; let grants = 0; let calls = 0;
   const options = rewardOptions(clock, { send: () => { calls++; return new Promise((resolve) => { resolveVideo = resolve; }); }, onGranted: () => grants++ });
   const first = requestEconomyReward(options);
-  assert.equal(await requestEconomyReward(options), "wait"); assert.equal(calls, 1);
+  assert.equal(await requestEconomyReward(options), "wait"); await new Promise(setImmediate); assert.equal(calls, 1);
   resolveVideo({ result: true }); assert.equal(await first, "granted"); assert.equal(grants, 1);
 });
 for (const [game, boundary] of [["gorn", "craft-finished"], ["lavka", "upgrade-bought"], ["lavka", "goods-unlocked"], ["omut", "sale-one"], ["omut", "sale-all"]]) {

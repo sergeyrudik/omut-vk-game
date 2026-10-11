@@ -1,3 +1,4 @@
+function memoryAdStorage(){const values=new Map();return {getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};}
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";
@@ -28,7 +29,7 @@ function actual(name, scope) {
 function fixture(rewards) {
   const state = engine.createDefaultSave(); state.rewards = { ...rewards }; state.started = true;
   if (game === "lavka") state.coins = 700; if (game === "gorn") state.ingots = 700; if (game === "omut") state.coins = 700;
-  const calls = []; const noop = () => {}; const policy = createAdPolicy({ storageKey: "quota", storage: null });
+  const calls = []; const noop = () => {}; const policy = createAdPolicy({ storageKey: "quota", storage: memoryAdStorage(), locks: null, settle: async () => {} });
   policy.seedLastAdAt(state.rewards.lastRewardAt);
   const saveRef = { current: state };
   const scope = { ...engine, ...state, saveRef, paused: false, phase: "idle", catchPopup: null,
@@ -41,14 +42,22 @@ function fixture(rewards) {
     window: { clearTimeout: noop, cancelAnimationFrame: noop },
   };
   for (const k of ["rewards", "stats", "ingots", "coins", "bait", "started", "offlineBanner", "tab", "fight", "holding", "castPos", "phase", "catchPopup", "lastResult", "splash", "rewardBusy", "adBusy", "boost", "now", "nowTick"]) scope[`set${k[0].toUpperCase()}${k.slice(1)}`] = value => { state[k] = typeof value === "function" ? value(state[k]) : value; };
+  scope.resetPendingRef = { current: false };
+  scope.fishingGenerationRef = { current: 0 };
+  scope.commitSave = async transform => {
+    const previous = structuredClone(state); const next = transform(previous);
+    if (next) scope.applySave(next);
+    return { previous, external: next ?? previous, value: next ? "stored" : null };
+  };
+  scope.synchronizeSave = () => state;
   if (game === "omut") scope.cancelFishing = actual("cancelFishing", scope);
   const render = () => { Object.assign(scope, state); saveRef.current = state; };
-  return { state, calls, policy, reset: () => { render(); actual("resetProgress", scope)(); render(); }, reward: () => { render(); return actual(game === "lavka" ? "watchReward" : "watchRewardAd", scope)(game === "gorn" ? "ingots" : "coins"); } };
+  return { state, calls, policy, reset: async () => { render(); await actual("resetProgress", scope)(); render(); }, reward: () => { render(); return actual(game === "lavka" ? "watchReward" : "watchRewardAd", scope)(game === "gorn" ? "ingots" : "coins"); } };
 }
 test(`${game}: actual reset retains exhausted same-day quota and cannot show a ninth ad after cooldown`, async t => {
   const now = Date.UTC(2026, 9, 11, 12); t.mock.timers.enable({ apis: ["Date"], now });
   const rewards = { date: "2026-10-11", count: 8, lastRewardAt: now - 180001 };
-  const f = fixture(rewards); f.reset(); t.mock.timers.tick(180001);
+  const f = fixture(rewards); await f.reset(); t.mock.timers.tick(180001);
   await f.reward();
   assert.equal(f.calls.length, 0, "reset cannot reopen native SDK for ninth reward");
   assert.deepEqual(f.state.rewards, rewards);
@@ -57,14 +66,14 @@ test(`${game}: actual reset retains exhausted same-day quota and cannot show a n
 test(`${game}: actual reset retains partial quota and uses remaining slots only`, async t => {
   const now = Date.UTC(2026, 9, 11, 12); t.mock.timers.enable({ apis: ["Date"], now });
   const rewards = { date: "2026-10-11", count: 7, lastRewardAt: now - 180001 };
-  const f = fixture(rewards); f.reset(); assert.deepEqual(f.state.rewards, rewards);
+  const f = fixture(rewards); await f.reset(); assert.deepEqual(f.state.rewards, rewards);
   await f.reward(); assert.equal(f.calls.length, 1); assert.equal(f.state.rewards.count, 8);
   t.mock.timers.tick(180001); await f.reward(); assert.equal(f.calls.length, 1); assert.equal(f.state.rewards.count, 8);
 });
 test(`${game}: actual reset refreshes an expired UTC quota while preserving recent ad protection`, async t => {
   const now = Date.UTC(2026, 9, 12, 0, 0, 1); t.mock.timers.enable({ apis: ["Date"], now });
   const rewards = { date: "2026-10-11", count: 8, lastRewardAt: now - 2000 };
-  const f = fixture(rewards); f.reset();
+  const f = fixture(rewards); await f.reset();
   assert.deepEqual(f.state.rewards, { ...rewards, date: "2026-10-12", count: 0 });
   await f.reward(); assert.equal(f.calls.length, 0);
   t.mock.timers.tick(180001); await f.reward(); assert.equal(f.calls.length, 1); assert.equal(f.state.rewards.count, 1);
